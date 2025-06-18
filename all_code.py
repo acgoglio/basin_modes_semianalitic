@@ -10,8 +10,10 @@ mpl.use('Agg')
 #####################
 # Inputs
 work_dir           = "/work/cmcc/ag15419/basin_modes_sa/"
-mode_num           = 101
-reference_period   = 24
+mode_num           = 100
+reference_period   = 12
+Tmin               = 1
+Tmax               = 40
 
 mesh_mask_file     = "/work/cmcc/ag15419/VAA_paper/DATA0/mesh_mask.nc"
 bathy_meter_file   = "/work/cmcc/ag15419/VAA_paper/DATA0/bathy_meter.nc"
@@ -184,7 +186,7 @@ def compute_barotropic_modes(A, k=10, which='LM'):
 
     # Solve A η = λ η, with λ = ω**2
     #eigvals, eigvecs = eigsh(A, k=k, which=which)
-    eigvals, eigvecs = eigsh(A, k=20, sigma=sigma, which='LM', mode='normal')
+    eigvals, eigvecs = eigsh(A, k=k, sigma=sigma, which='LM', mode='normal')
 
     # Frequenze in rad/s (ω = sqrt(λ))
     omega = np.sqrt(np.abs(eigvals))  # abs to avoid numerical issues
@@ -334,7 +336,7 @@ def plot_amplitude_phase(amplitude, phase, mask, prefix="mode", dpi=150):
     plt.colorbar(im2, ax=axs[1], orientation='horizontal')
 
     plt.tight_layout()
-    plt.savefig(f"{prefix}_amp_phase.png", dpi=dpi)
+    plt.savefig(f"{work_dir}/{prefix}_amp_phase.png", dpi=dpi)
     plt.close()
 
 def save_amp_phase_to_netcdf(filename, amplitudes, phases, periods):
@@ -379,7 +381,7 @@ def load_complex_modes_from_netcdf(filename):
         periods = ds.variables['period'][:]
     return amplitudes, phases, periods
 
-###################
+################### MAIN #############
 # Prepare input fields
 print ('Preparing input fields..')
 mask, bathy, coriolis, dx, dy = prepare_fields(mesh_mask_file, bathy_meter_file)
@@ -392,8 +394,8 @@ J, I = np.indices((ny, nx))
 atlantic_mask = (I < 300) | ((I < 415) & (J > 250))
 mask[atlantic_mask] = 0
 
+# Mask also all the subregions except from the Adriatic Sea (temporary for test)
 if flag_only_adriatic == 1 :
-   # Mask also all the subregions except from the Adriatic Sea (temporary for test)
    # cut the Thyrrenian box
    J, I = np.indices((ny, nx))
    box_mask = (I < 820) & (J < 285)
@@ -420,6 +422,13 @@ if flag_compute_modes != 0 :
    print ('Compute the modes')
    omega, period, modes = compute_barotropic_modes(A, k=mode_num)
    print ('Done!')
+   print ('Select modes with periods in the following range [h]:',Tmin,Tmax)
+   valid = np.where((period >= Tmin) & (period <= Tmax))[0]
+   omega, period = omega[valid], period[valid]
+   modes = modes[:, valid]
+   k = len(omega)
+   print (k,' modes selected')
+   print ('Done!')
    print ('Build 2d modes')
    shape = mask.shape
    modes_2D = reconstruct_modes(modes, invmap, shape)
@@ -439,7 +448,7 @@ for m in range(mode_num):
     plot_mode(modes_2D[m], mask, title=title, filename=filename)
 print ('Done!')
 
-########## Complex modes ############
+########### Complex modes ############
 ## Compute or load complex modes
 #if flag_compute_modes != 0:
 #    print('Compute the C modes')
