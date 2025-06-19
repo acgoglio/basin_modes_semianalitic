@@ -8,58 +8,69 @@ import matplotlib.pyplot as plt
 mpl.use('Agg')
 
 #####################
-# Inputs
+# INPUTS
+# Work directory
 work_dir           = "/work/cmcc/ag15419/basin_modes_sa/"
+# Num of modes to be analyzed
 mode_num           = 100
+# The code starts to look for modes around the following period [h]
 reference_period   = 12
-Tmin               = 1
+# Order the modes from the smallest or from the greatest ('SM' or 'LM')
+eig_order          = 'LM'
+# Min val of the modes periods [h]
+Tmin               = 0
+# Max val of the modes periods [h]
 Tmax               = 40
+# Consider only the modes whose amplitude is higher than Perc_Amp % of the highest amplitude value in a num of grid points higher than Counts_min 
+Perc_Amp           = 1
+Counts_min         = 100
+# Amplitude palette limits [-Plot_max,Plot_max] [%]
+Plot_max           = 25
 
+# NEMO Mesh
 mesh_mask_file     = "/work/cmcc/ag15419/VAA_paper/DATA0/mesh_mask.nc"
+# NEMO Bathymetry
 bathy_meter_file   = "/work/cmcc/ag15419/VAA_paper/DATA0/bathy_meter.nc"
 
+# Outfiles 
 outfile_R          = work_dir+'med_modes_'+str(mode_num)+'.nc'
-outfile_C          = work_dir+'med_modes_'+str(mode_num)+'_C.nc'
+#outfile_C          = work_dir+'med_modes_'+str(mode_num)+'_C.nc'
 
+# If you want to compute the mode flag_compute_modes = 1 
 flag_compute_modes = 1
+
+# To test the code on the Adriatic Sea area set flag_only_adriatic = 1
 flag_only_adriatic = 1
 
 #####################
 def prepare_fields(meshmask_path, bathy_path):
+
     # Open input files
-    print ('Open file',meshmask_path)
     ds_mask = xr.open_dataset(meshmask_path, decode_times=False)
-    print ('Done!')
-    print ('Open file',bathy_path)
     ds_bathy = xr.open_dataset(bathy_path, decode_times=False)
-    print ('Done!')
 
     # Land/sea mask
-    print ('Reading land/sea mask..') 
     mask = ds_mask['tmask'].isel(t=0, z=0).values.astype(bool)
-    print ('Done!')
 
     # Bathymetry
-    print ('Reading Bathymetry..')
     bathy = ds_bathy['Bathymetry'].values
     bathy = np.where(mask, bathy, np.nan)
-    print ('Done!')
 
-    print ('Computing f Coriolis..')
     # Lat
     lat = ds_mask['nav_lat'].values
     # Coriolis f
     omega = 7.292115e-5  # rad/s
     coriolis = 2 * omega * np.sin(np.deg2rad(lat))
-    print ('Done!')
 
     # Grid (dx, dy)
-    print ('Reading the horizontal grid..')
-    dx = ds_mask['e1t'].values  # m
-    dy = ds_mask['e2t'].values  # m
-    print ('Done!')
+    dxt = ds_mask['e1t'].values  # m
+    dyt = ds_mask['e2t'].values  # m
+    dxu = ds_mask['e1u'].values  # m
+    dyu = ds_mask['e2u'].values  # m
+    dxv = ds_mask['e1v'].values  # m
+    dyv = ds_mask['e2v'].values  # m
 
-    return mask, bathy, coriolis, dx, dy
+    return mask, bathy, coriolis, dxu, dyu, dxv, dxv, dxt, dyt 
 
 def plot_input_fields(mask, bathy, coriolis, dx, dy, filename="input_fields.png", dpi=150):
     fig, axs = plt.subplots(2, 3, figsize=(18, 10))
@@ -95,22 +106,8 @@ def plot_input_fields(mask, bathy, coriolis, dx, dy, filename="input_fields.png"
     plt.savefig(filename, dpi=dpi)
     plt.close()
 
-def build_operator_A(mask, bathy, coriolis, dx, dy, g=9.81):
-    """
-    Costruisce l'operatore A in forma sparsa usando dx, dy variabili su griglia 2D.
+def build_operator_A(mask, bathy, coriolis, e1u, e2v, e1t, e2t, g=9.81):
 
-    Parametri:
-    - mask: 2D array binario (1 = mare, 0 = terra)
-    - bathy: 2D array con profondità H (m)
-    - coriolis: 2D array con f (s⁻¹)
-    - dx, dy: 2D array con passo griglia in x e y (m)
-    - g: accelerazione gravitazionale (default = 9.81 m/s²)
-
-    Ritorna:
-    - A: matrice sparsa (Nwet x Nwet)
-    - mapping: dizionario (i,j) → indice vettoriale
-    - invmap: dizionario indice vettoriale → (i,j)
-    """
     ny, nx = mask.shape
     mapping = {}
     invmap = {}
@@ -129,33 +126,41 @@ def build_operator_A(mask, bathy, coriolis, dx, dy, g=9.81):
 
     for k in range(N):
         i, j = invmap[k]
-        H = bathy[0, j, i]
+        H = bathy[j, i]
         f = coriolis[j, i]
-        diag = -f**2 * H  # termine rotazionale
+        diag = f**2 * H  # termine rotazionale POSITIVO
 
-        # Punti griglia vicini in x e y dir
-        for (di, dj) in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
-            ni, nj = i + di, j + dj
-            if 0 <= ni < nx and 0 <= nj < ny and mask[nj, ni]:
-                Hij = 0.5 * (bathy[0, j, i] + bathy[0, nj, ni])
-
-                if di != 0:  # dir x
-                    dxij = 0.5 * (dx[0, j, i] + dx[0,nj, ni])
-                    dxy = dxij ** 2
-                else:        # dir y
-                    dyij = 0.5 * (dy[0, j, i] + dy[0, nj, ni])
-                    dxy = dyij ** 2
-
-                coeff = -g * Hij / dxy
-                n_idx = mapping[(ni, nj)]
+        # X-direction (U-points)
+        for di in [-1, 1]:
+            ni = i + di
+            if 0 <= ni < nx and mask[j, ni]:
+                Hij = 0.5 * (bathy[j, i] + bathy[j, ni])
+                e1u_ij = e1u[j, i] if di > 0 else e1u[j, ni]
+                coeff = g * Hij / (e1u_ij ** 2 * e1t[j, i])
+                n_idx = mapping[(ni, j)]
 
                 rows.append(k)
                 cols.append(n_idx)
-                data.append(coeff)
+                data.append(-coeff)
 
-                diag += g * Hij / dxy
+                diag += coeff
 
-        # termine diagonale
+        # Y-direction (V-points)
+        for dj in [-1, 1]:
+            nj = j + dj
+            if 0 <= nj < ny and mask[nj, i]:
+                Hij = 0.5 * (bathy[j, i] + bathy[nj, i])
+                e2v_ij = e2v[j, i] if dj > 0 else e2v[nj, i]
+                coeff = g * Hij / (e2v_ij ** 2 * e2t[j, i])
+                n_idx = mapping[(i, nj)]
+
+                rows.append(k)
+                cols.append(n_idx)
+                data.append(-coeff)
+
+                diag += coeff
+
+        # Termine diagonale
         rows.append(k)
         cols.append(k)
         data.append(diag)
@@ -163,52 +168,37 @@ def build_operator_A(mask, bathy, coriolis, dx, dy, g=9.81):
     A = sp.csr_matrix((data, (rows, cols)), shape=(N, N))
     return A, mapping, invmap
 
-def compute_barotropic_modes(A, k=10, which='LM'):
+def compute_barotropic_modes(A, k=10, which='LM', reference_period=12):
     """
-    Calcola i primi k modi normali barotropici risolvendo:
-        A η = ω**2 η
-
-    Parametri:
-    - A: matrice sparsa (costruita da build_operator_A)
-    - k: numero di modi da calcolare (default 10)
-    - which: quali autovalori ('SM' = Smallest Magnitude; 'LM' = Largest Magnitude)
-    oppure:
-   - sigma: calcolato in base al parametro fornito in input 
-
-    Ritorna:
-    - omega: array 1D di frequenze (rad/s)
-    - modes: matrice 2D (Nwet x k) con i modi normalizzati
+    Calcola i primi k modi barotropici risolvendo:
+        A η = λ η  con A ≈ g∇·(H∇η) + f²Hη
+        λ = ω²
     """
-    # Compute sigma
+    # Compute sigma (target eigenvalue)
     Tref_sec = reference_period * 3600
     omega_ref = 2 * np.pi / Tref_sec
-    sigma=-omega_ref**2
+    sigma = omega_ref**2  # NOTE: positivo!
 
-    # Solve A η = λ η, with λ = ω**2
-    #eigvals, eigvecs = eigsh(A, k=k, which=which)
-    eigvals, eigvecs = eigsh(A, k=k, sigma=sigma, which='LM', mode='normal')
+    # Solve A η = λ η with shift-invert
+    eigvals, eigvecs = eigsh(A, k=k, sigma=sigma, which=which, mode='normal')
+    print("Eigenvalues:", eigvals)
 
-    # Frequenze in rad/s (ω = sqrt(λ))
-    omega = np.sqrt(np.abs(eigvals))  # abs to avoid numerical issues
-    # Periods in h
-    period = 2 * np.pi / omega / 3600  # hours
+    # Consider only positive eigenvalues (physical)
+    valid = eigvals > 0
+    eigvals = eigvals[valid]
+    eigvecs = eigvecs[:, valid]
+    print("Eigenvalues with physical relevance:", eigvals)
 
-    print ('periods:',period)
+    # Frequenze ω = sqrt(λ)
+    omega = np.sqrt(eigvals)
+
+    # Periodi in ore
+    period = 2 * np.pi / omega / 3600
+    print('Selected periods:', period)
 
     return omega, period, eigvecs
 
 def reconstruct_modes(modes, invmap, shape):
-    """
-    Ricostruisce i modi 2D a partire dagli autovettori 1D.
-
-    Parametri:
-    - modes: array 2D (Nwet x Nmodes)
-    - invmap: dizionario indice → (i, j)
-    - shape: tuple (ny, nx) del dominio originale
-
-    Ritorna:
-    - modes_2D: array 3D (Nmodes, ny, nx)
-    """
     Nmodes = modes.shape[1]
     ny, nx = shape
     modes_2D = np.full((Nmodes, ny, nx), np.nan)
@@ -220,15 +210,7 @@ def reconstruct_modes(modes, invmap, shape):
     return modes_2D
 
 def save_modes_to_netcdf(filename, modes_2D, periods, mask=None):
-    """
-    Salva i modi 2D in un file NetCDF.
-    
-    Parametri:
-    - filename: nome del file .nc
-    - modes_2D: array (k, ny, nx) dei modi
-    - periods: array (k,) dei periodi in ore
-    - mask: array (ny, nx) opzionale
-    """
+
     k, ny, nx = modes_2D.shape
 
     with nc.Dataset(filename, 'w') as ds:
@@ -263,20 +245,8 @@ def load_modes_from_netcdf(filename):
         mask = ds.variables['mask'][:] if 'mask' in ds.variables else None
     return modes_2D, periods, mask
 
-def plot_mode(mode_2d, mask, title="", filename="mode.png", cmap="RdBu_r", dpi=150, n_levels=51):
-    """
-    Plotta e salva un singolo modo barotropico in 2D, normalizzato in modo che
-    il massimo valore assoluto sia 100.
+def plot_mode(mode_2d, mask, title="", filename="mode.png", filename_abs="mode_abs.png", cmap="RdBu_r", cmap_abs="gist_stern_r", dpi=150, n_levels=51): 
 
-    Parametri:
-    - mode_2d: array 2D (ny, nx) con valori del modo
-    - mask: 2D array (1 = mare, 0 = terra)
-    - title: titolo del grafico
-    - filename: nome del file immagine da salvare
-    - cmap: colormap (default = "RdBu_r")
-    - dpi: risoluzione in output
-    - n_levels: numero di livelli discreti nella colormap
-    """
     plt.figure(figsize=(10, 6))
 
     # Normalizza a 100
@@ -286,7 +256,7 @@ def plot_mode(mode_2d, mask, title="", filename="mode.png", cmap="RdBu_r", dpi=1
     masked = np.ma.masked_where(~mask.astype(bool), norm_mode)
 
     # Costruisce palette discreta centrata in zero
-    levels = np.linspace(-100, 100, n_levels)
+    levels = np.linspace(-Plot_max, Plot_max, n_levels)
     norm = mpl.colors.BoundaryNorm(levels, ncolors=256)
 
     # Linea di costa (contorno della maschera)
@@ -306,85 +276,95 @@ def plot_mode(mode_2d, mask, title="", filename="mode.png", cmap="RdBu_r", dpi=1
     plt.savefig(filename, dpi=dpi)
     plt.close()
 
-def build_complex_mode(eta1, eta2):
-    """
-    Costruisce il modo complesso η = η1 + i η2
-    e restituisce ampiezza e fase spaziali.
-    """
-    eta_complex = eta1 + 1j * eta2
-    amplitude = np.abs(eta_complex)
-    phase = np.angle(eta_complex)  # in radianti
-    return amplitude, phase
+    #########
+    # Abs plot
+    plt.figure(figsize=(10, 6))
 
-def plot_amplitude_phase(amplitude, phase, mask, prefix="mode", dpi=150):
-    import matplotlib.pyplot as plt
-    import numpy as np
+    # Prendo abs 
+    masked=np.abs(masked)    
 
-    amp_masked = np.ma.masked_where(~mask, amplitude)
-    pha_masked = np.ma.masked_where(~mask, phase)
+    # Costruisce palette discreta centrata in zero
+    levels = np.linspace(0, Plot_max, n_levels)
+    norm = mpl.colors.BoundaryNorm(levels, ncolors=256)
 
-    fig, axs = plt.subplots(1, 2, figsize=(14, 6))
+    # Linea di costa (contorno della maschera)
+    plt.contour(mask, levels=[0.5], colors='k', linewidths=0.5)
 
-    im1 = axs[0].imshow(amp_masked, cmap='viridis')
-    axs[0].set_title("Ampiezza |\u03b7|")
-    axs[0].invert_yaxis()
-    plt.colorbar(im1, ax=axs[0], orientation='horizontal')
+    # Plot
+    im = plt.imshow(masked, cmap=cmap_abs, norm=norm)
+    cbar = plt.colorbar(im, orientation='horizontal', ticks=levels[::2])
+    cbar.set_label("Mode amplitude (%)")
 
-    im2 = axs[1].imshow(pha_masked, cmap='twilight', vmin=-np.pi, vmax=np.pi)
-    axs[1].set_title("Fase \u03b1 (rad)")
-    axs[1].invert_yaxis()
-    plt.colorbar(im2, ax=axs[1], orientation='horizontal')
-
+    plt.title(title)
+    plt.xlabel("i")
+    plt.ylabel("j")
+    plt.xlim(300,1307)
+    plt.gca().invert_yaxis()
     plt.tight_layout()
-    plt.savefig(f"{work_dir}/{prefix}_amp_phase.png", dpi=dpi)
+    plt.savefig(filename_abs, dpi=dpi)
     plt.close()
 
-def save_amp_phase_to_netcdf(filename, amplitudes, phases, periods):
-    """
-    Salva ampiezze, fasi e periodi dei modi complessi in un file NetCDF.
-    """
-    Nmodes, ny, nx = amplitudes.shape
-    with nc.Dataset(filename, 'w') as ds:
-        ds.createDimension('mode', Nmodes)
-        ds.createDimension('y', ny)
-        ds.createDimension('x', nx)
-
-        amp_var = ds.createVariable('amplitude', 'f4', ('mode', 'y', 'x'))
-        pha_var = ds.createVariable('phase', 'f4', ('mode', 'y', 'x'))
-        per_var = ds.createVariable('period', 'f4', ('mode',))
-
-        amp_var.units = 'm'
-        pha_var.units = 'radians'
-        per_var.units = 'hours'
-
-        amp_var[:] = amplitudes
-        pha_var[:] = phases
-        per_var[:] = periods
-
-    print(f"Salvato file NetCDF: {filename}")
-
-def load_complex_modes_from_netcdf(filename):
-    """
-    Carica ampiezze, fasi e periodi da un file NetCDF con modi complessi.
-
-    Parametri:
-    - filename: percorso del file .nc da leggere
-
-    Ritorna:
-    - amplitudes: array 3D (Nmodes, ny, nx)
-    - phases:     array 3D (Nmodes, ny, nx)
-    - periods:    array 1D (Nmodes,) in ore
-    """
-    with nc.Dataset(filename, 'r') as ds:
-        amplitudes = ds.variables['amplitude'][:]
-        phases = ds.variables['phase'][:]
-        periods = ds.variables['period'][:]
-    return amplitudes, phases, periods
+#def build_complex_mode(eta1, eta2):
+#
+#    eta_complex = eta1 + 1j * eta2
+#    amplitude = np.abs(eta_complex)
+#    phase = np.angle(eta_complex)  # in radianti
+#    return amplitude, phase
+#
+#def plot_amplitude_phase(amplitude, phase, mask, prefix="mode", dpi=150):
+#
+#    amp_masked = np.ma.masked_where(~mask, amplitude)
+#    pha_masked = np.ma.masked_where(~mask, phase)
+#
+#    fig, axs = plt.subplots(1, 2, figsize=(14, 6))
+#
+#    im1 = axs[0].imshow(amp_masked, cmap='viridis')
+#    axs[0].set_title("Ampiezza |\u03b7|")
+#    axs[0].invert_yaxis()
+#    plt.colorbar(im1, ax=axs[0], orientation='horizontal')
+#
+#    im2 = axs[1].imshow(pha_masked, cmap='twilight', vmin=-np.pi, vmax=np.pi)
+#    axs[1].set_title("Fase \u03b1 (rad)")
+#    axs[1].invert_yaxis()
+#    plt.colorbar(im2, ax=axs[1], orientation='horizontal')
+#
+#    plt.tight_layout()
+#    plt.savefig(f"{work_dir}/{prefix}_amp_phase.png", dpi=dpi)
+#    plt.close()
+#
+#def save_amp_phase_to_netcdf(filename, amplitudes, phases, periods):
+#
+#    Nmodes, ny, nx = amplitudes.shape
+#    with nc.Dataset(filename, 'w') as ds:
+#        ds.createDimension('mode', Nmodes)
+#        ds.createDimension('y', ny)
+#        ds.createDimension('x', nx)
+#
+#        amp_var = ds.createVariable('amplitude', 'f4', ('mode', 'y', 'x'))
+#        pha_var = ds.createVariable('phase', 'f4', ('mode', 'y', 'x'))
+#        per_var = ds.createVariable('period', 'f4', ('mode',))
+#
+#        amp_var.units = 'm'
+#        pha_var.units = 'radians'
+#        per_var.units = 'hours'
+#
+#        amp_var[:] = amplitudes
+#        pha_var[:] = phases
+#        per_var[:] = periods
+#
+#    print(f"Salvato file NetCDF: {filename}")
+#
+#def load_complex_modes_from_netcdf(filename):
+#    with nc.Dataset(filename, 'r') as ds:
+#        amplitudes = ds.variables['amplitude'][:]
+#        phases = ds.variables['phase'][:]
+#        periods = ds.variables['period'][:]
+#    return amplitudes, phases, periods
 
 ################### MAIN #############
 # Prepare input fields
 print ('Preparing input fields..')
-mask, bathy, coriolis, dx, dy = prepare_fields(mesh_mask_file, bathy_meter_file)
+mask, bathy, coriolis, dxu, dyu, dxv, dxv, dxt, dyt = prepare_fields(mesh_mask_file, bathy_meter_file)
 print ('Done!')
 
 # Compute and plot the Med modes
@@ -409,19 +389,21 @@ if flag_only_adriatic == 1 :
 
 # Plot input fields
 print ('Plotting input fields..')
-plot_input_fields(np.squeeze(mask), np.squeeze(bathy), np.squeeze(coriolis), np.squeeze(dx), np.squeeze(dy), filename=work_dir+"input_fields"+str(mode_num)+".png")
+plot_input_fields(np.squeeze(mask), np.squeeze(bathy), np.squeeze(coriolis), np.squeeze(dxt), np.squeeze(dyt), filename=work_dir+"input_fields"+str(mode_num)+".png")
 print ('Done!')
 
 ########### Real modes ##############3
 
-print ('Done!')
 if flag_compute_modes != 0 :
-   print ('Compute A operator..')
-   A, mapping, invmap = build_operator_A(mask, bathy, coriolis, dx, dy)
+
+   print ('Compute A operator')
+   A, mapping, invmap = build_operator_A(mask, bathy, coriolis, dxu, dyv, dxt, dyt)
    print ('Done!')
+
    print ('Compute the modes')
-   omega, period, modes = compute_barotropic_modes(A, k=mode_num)
+   omega, period, modes = compute_barotropic_modes(A, k=mode_num, which=eig_order,reference_period=reference_period)
    print ('Done!')
+
    print ('Select modes with periods in the following range [h]:',Tmin,Tmax)
    valid = np.where((period >= Tmin) & (period <= Tmax))[0]
    omega, period = omega[valid], period[valid]
@@ -429,10 +411,19 @@ if flag_compute_modes != 0 :
    k = len(omega)
    print (k,' modes selected')
    print ('Done!')
+
    print ('Build 2d modes')
    shape = mask.shape
    modes_2D = reconstruct_modes(modes, invmap, shape)
    print ('Done!')
+
+   #print ('Select modes with a relevant amplitude')
+   Amax=np.nanmax(modes_2D)
+   print ('Max amplitude is:',Amax)
+   Th_Amp=Amax*Perc_Amp/100.0
+   print ('Amplitude threshold is:',Th_Amp)
+   print ('Done!')
+
    print ('Save the R modes')
    save_modes_to_netcdf(outfile_R, modes_2D, period, mask=mask)
    print ('Done!')
@@ -440,12 +431,19 @@ if flag_compute_modes != 0 :
 else:
    print ('Load the R modes')
    modes_2D, period, mask = load_modes_from_netcdf(outfile_R)
+   print ('Done!')
 
 print ('Plot the R modes amplitude')
-for m in range(mode_num):
-    title    = f"Barotropic mode {m+1} - Period {period[m]:0.2f} h"
-    filename = f"/work/cmcc/ag15419/basin_modes_sa/mode_{m+1:02d}_{mode_num}.png"
-    plot_mode(modes_2D[m], mask, title=title, filename=filename)
+print ('Print only the modes with a relevant amplitude')
+for m in range(k):
+    if np.nanmax(modes_2D[m]) > Th_Amp:
+       counts = np.sum(modes_2D[m] > Th_Amp)
+       if counts > Counts_min: 
+          print ('Mode:',m,f'{period[m]:0.2f} h')
+          title    = f"Barotropic mode {m+1} - Period {period[m]:0.2f} h"
+          filename = f"/work/cmcc/ag15419/basin_modes_sa/mode_{m+1:02d}_{mode_num}.png"
+          filename_abs = f"/work/cmcc/ag15419/basin_modes_sa/mode_abs_{m+1:02d}_{mode_num}.png"
+          plot_mode(modes_2D[m], mask, title=title, filename=filename,filename_abs=filename_abs)
 print ('Done!')
 
 ########### Complex modes ############
