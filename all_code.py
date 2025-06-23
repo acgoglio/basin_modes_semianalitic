@@ -12,7 +12,7 @@ mpl.use('Agg')
 # Work directory
 work_dir           = "/work/cmcc/ag15419/basin_modes_sa/"
 # Num of modes to be analyzed
-mode_num           = 100
+mode_num           = 1000
 # The code starts to look for modes around the following period [h]
 reference_period   = 12
 # Order the modes from the smallest or from the greatest ('SM' or 'LM')
@@ -25,7 +25,7 @@ Tmax               = 40
 Perc_Amp           = 1
 Counts_min         = 100
 # Amplitude palette limits [-Plot_max,Plot_max] [%]
-Plot_max           = 25
+Plot_max           = 100
 
 # NEMO Mesh
 mesh_mask_file     = "/work/cmcc/ag15419/VAA_paper/DATA0/mesh_mask.nc"
@@ -40,7 +40,7 @@ outfile_R          = work_dir+'med_modes_'+str(mode_num)+'.nc'
 flag_compute_modes = 1
 
 # To test the code on the Adriatic Sea area set flag_only_adriatic = 1
-flag_only_adriatic = 1
+flag_only_adriatic = 0
 
 #####################
 def prepare_fields(meshmask_path, bathy_path):
@@ -53,7 +53,7 @@ def prepare_fields(meshmask_path, bathy_path):
     mask = ds_mask['tmask'].isel(t=0, z=0).values.astype(bool)
 
     # Bathymetry
-    bathy = ds_bathy['Bathymetry'].values
+    bathy = ds_bathy['Bathymetry'].isel(time_counter=0).values
     bathy = np.where(mask, bathy, np.nan)
 
     # Lat
@@ -63,14 +63,14 @@ def prepare_fields(meshmask_path, bathy_path):
     coriolis = 2 * omega * np.sin(np.deg2rad(lat))
 
     # Grid (dx, dy)
-    dxt = ds_mask['e1t'].values  # m
-    dyt = ds_mask['e2t'].values  # m
-    dxu = ds_mask['e1u'].values  # m
-    dyu = ds_mask['e2u'].values  # m
-    dxv = ds_mask['e1v'].values  # m
-    dyv = ds_mask['e2v'].values  # m
+    dxt = ds_mask['e1t'].isel(t=0).values  # m
+    dyt = ds_mask['e2t'].isel(t=0).values  # m
+    dxu = ds_mask['e1u'].isel(t=0).values  # m
+    dyu = ds_mask['e2u'].isel(t=0).values  # m
+    dxv = ds_mask['e1v'].isel(t=0).values  # m
+    dyv = ds_mask['e2v'].isel(t=0).values  # m
 
-    return mask, bathy, coriolis, dxu, dyu, dxv, dxv, dxt, dyt 
+    return mask, bathy, coriolis, dxu, dyu, dxv, dyv, dxt, dyt 
 
 def plot_input_fields(mask, bathy, coriolis, dx, dy, filename="input_fields.png", dpi=150):
     fig, axs = plt.subplots(2, 3, figsize=(18, 10))
@@ -107,13 +107,11 @@ def plot_input_fields(mask, bathy, coriolis, dx, dy, filename="input_fields.png"
     plt.close()
 
 def build_operator_A(mask, bathy, coriolis, e1u, e2v, e1t, e2t, g=9.81):
-
     ny, nx = mask.shape
     mapping = {}
     invmap = {}
     idx = 0
 
-    # Mappa (i,j) <-> indice vettoriale
     for j in range(ny):
         for i in range(nx):
             if mask[j, i]:
@@ -128,68 +126,73 @@ def build_operator_A(mask, bathy, coriolis, e1u, e2v, e1t, e2t, g=9.81):
         i, j = invmap[k]
         H = bathy[j, i]
         f = coriolis[j, i]
-        diag = f**2 * H  # termine rotazionale POSITIVO
+        diag = f**2  # termine rotazionale POSITIVO e solo sulla diag
 
-        # X-direction (U-points)
+        # Direzione x (U-points)
         for di in [-1, 1]:
             ni = i + di
+            # Se e' dentro il dominio e se e' punto mare
             if 0 <= ni < nx and mask[j, ni]:
+                # Calcolo bathy media tra i due punti consecutivi
                 Hij = 0.5 * (bathy[j, i] + bathy[j, ni])
+                # calcolo la lunghezza della cella in direzione zonale
                 e1u_ij = e1u[j, i] if di > 0 else e1u[j, ni]
-                coeff = g * Hij / (e1u_ij ** 2 * e1t[j, i])
+                # Calcolo il coeff
+                coeff = g * Hij / (e1u_ij * e1t[j, i])
                 n_idx = mapping[(ni, j)]
 
+                # La righa dell'operatore corrisponde al punto corrente (k)
                 rows.append(k)
+                # Il valore nella colonna dell'operatore corrisponde invece al punto con cui interagisce il punto corrente 
                 cols.append(n_idx)
-                data.append(-coeff)
+                # Scrivo i Valori fuori diagonale
+                data.append(coeff)    # Scrivo il termine non rot POSITIVO fuori diag
+                # Aggiorno i valori della diagonale (sottraendo dal termine rotazionale)
+                diag -= coeff         # termine non rot NEGATIVO sulla diagonale
 
-                diag += coeff
-
-        # Y-direction (V-points)
+        # Direzione y (V-points) - stessa cosa
         for dj in [-1, 1]:
             nj = j + dj
             if 0 <= nj < ny and mask[nj, i]:
                 Hij = 0.5 * (bathy[j, i] + bathy[nj, i])
                 e2v_ij = e2v[j, i] if dj > 0 else e2v[nj, i]
-                coeff = g * Hij / (e2v_ij ** 2 * e2t[j, i])
+                coeff = g * Hij / (e2v_ij * e2t[j, i])
                 n_idx = mapping[(i, nj)]
 
                 rows.append(k)
                 cols.append(n_idx)
-                data.append(-coeff)
+                data.append(coeff)    # Scrivo il termine non rot POSITIVO fuori diag
+                # Aggiorno i valori della diagonale (sottraendo dal termine rotazionale)
+                diag -= coeff         # termine non rot NEGATIVO sulla diagonale
 
-                diag += coeff
-
-        # Termine diagonale
+        # Scrivo i valori calcolati per la diagonale
         rows.append(k)
         cols.append(k)
         data.append(diag)
 
     A = sp.csr_matrix((data, (rows, cols)), shape=(N, N))
+    print("A symmetric?", (A - A.T).nnz == 0)
+    print ('Prova',A)
     return A, mapping, invmap
 
 def compute_barotropic_modes(A, k=10, which='LM', reference_period=12):
-    """
-    Calcola i primi k modi barotropici risolvendo:
-        A η = λ η  con A ≈ g∇·(H∇η) + f²Hη
-        λ = ω²
-    """
     # Compute sigma (target eigenvalue)
     Tref_sec = reference_period * 3600
     omega_ref = 2 * np.pi / Tref_sec
-    sigma = omega_ref**2  # NOTE: positivo!
+    sigma = omega_ref**2  
 
-    # Solve A η = λ η with shift-invert
+    # Solve perche' l'eq. e' A eta = lambda eta
     eigvals, eigvecs = eigsh(A, k=k, sigma=sigma, which=which, mode='normal')
+    #eigvals, eigvecs =eigsh(A, k=k, which=which)
     print("Eigenvalues:", eigvals)
 
-    # Consider only positive eigenvalues (physical)
+    # Consider only physical eigenvalues
     valid = eigvals > 0
     eigvals = eigvals[valid]
     eigvecs = eigvecs[:, valid]
     print("Eigenvalues with physical relevance:", eigvals)
 
-    # Frequenze ω = sqrt(λ)
+    # Frequenze omega = sqrt(lambda)
     omega = np.sqrt(eigvals)
 
     # Periodi in ore
@@ -364,7 +367,7 @@ def plot_mode(mode_2d, mask, title="", filename="mode.png", filename_abs="mode_a
 ################### MAIN #############
 # Prepare input fields
 print ('Preparing input fields..')
-mask, bathy, coriolis, dxu, dyu, dxv, dxv, dxt, dyt = prepare_fields(mesh_mask_file, bathy_meter_file)
+mask, bathy, coriolis, dxu, dyu, dxv, dyv, dxt, dyt = prepare_fields(mesh_mask_file, bathy_meter_file)
 print ('Done!')
 
 # Compute and plot the Med modes
