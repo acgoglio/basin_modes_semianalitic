@@ -3,6 +3,7 @@ import xarray as xr
 import numpy as np
 import scipy.sparse as sp
 from scipy.sparse.linalg import eigsh
+from scipy.linalg import eigh
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 mpl.use('Agg')
@@ -18,12 +19,12 @@ reference_period   = 12
 # Order the modes from the smallest or from the greatest ('SM' or 'LM')
 eig_order          = 'LM'
 # Min val of the modes periods [h]
-Tmin               = 0
+Tmin               = 2
 # Max val of the modes periods [h]
 Tmax               = 40
 # Consider only the modes whose amplitude is higher than Perc_Amp % of the highest amplitude value in a num of grid points higher than Counts_min 
 Perc_Amp           = 1
-Counts_min         = 100
+Counts_min         = 200
 # Amplitude palette limits [-Plot_max,Plot_max] [%]
 Plot_max           = 100
 
@@ -126,7 +127,7 @@ def build_operator_A(mask, bathy, coriolis, e1u, e2v, e1t, e2t, g=9.81):
         i, j = invmap[k]
         H = bathy[j, i]
         f = coriolis[j, i]
-        diag = f**2  # termine rotazionale POSITIVO e solo sulla diag
+        diag = - f**2  # termine rotazionale solo sulla diag
 
         # Direzione x (U-points)
         for di in [-1, 1]:
@@ -146,9 +147,9 @@ def build_operator_A(mask, bathy, coriolis, e1u, e2v, e1t, e2t, g=9.81):
                 # Il valore nella colonna dell'operatore corrisponde invece al punto con cui interagisce il punto corrente 
                 cols.append(n_idx)
                 # Scrivo i Valori fuori diagonale
-                data.append(coeff)    # Scrivo il termine non rot POSITIVO fuori diag
+                data.append(coeff)    # Scrivo il termine non rot fuori diag
                 # Aggiorno i valori della diagonale (sottraendo dal termine rotazionale)
-                diag -= coeff         # termine non rot NEGATIVO sulla diagonale
+                diag = diag - coeff         # termine non rot sulla diagonale
 
         # Direzione y (V-points) - stessa cosa
         for dj in [-1, 1]:
@@ -161,9 +162,9 @@ def build_operator_A(mask, bathy, coriolis, e1u, e2v, e1t, e2t, g=9.81):
 
                 rows.append(k)
                 cols.append(n_idx)
-                data.append(coeff)    # Scrivo il termine non rot POSITIVO fuori diag
+                data.append(coeff)    # Scrivo il termine non rot fuori diag
                 # Aggiorno i valori della diagonale (sottraendo dal termine rotazionale)
-                diag -= coeff         # termine non rot NEGATIVO sulla diagonale
+                diag = diag - coeff        # termine non rot sulla diagonale
 
         # Scrivo i valori calcolati per la diagonale
         rows.append(k)
@@ -179,7 +180,7 @@ def compute_barotropic_modes(A, k=10, which='LM', reference_period=12):
     # Compute sigma (target eigenvalue)
     Tref_sec = reference_period * 3600
     omega_ref = 2 * np.pi / Tref_sec
-    sigma = omega_ref**2  
+    sigma = - omega_ref**2  
 
     # Solve perche' l'eq. e' A eta = lambda eta
     eigvals, eigvecs = eigsh(A, k=k, sigma=sigma, which=which, mode='normal')
@@ -187,13 +188,14 @@ def compute_barotropic_modes(A, k=10, which='LM', reference_period=12):
     print("Eigenvalues:", eigvals)
 
     # Consider only physical eigenvalues
-    valid = eigvals > 0
+    valid = eigvals < 0
     eigvals = eigvals[valid]
     eigvecs = eigvecs[:, valid]
     print("Eigenvalues with physical relevance:", eigvals)
 
     # Frequenze omega = sqrt(lambda)
-    omega = np.sqrt(eigvals)
+    omega = np.sqrt(-eigvals)
+    #omega = np.sqrt(np.abs(eigvals))
 
     # Periodi in ore
     period = 2 * np.pi / omega / 3600
