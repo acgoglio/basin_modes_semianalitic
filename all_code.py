@@ -1,21 +1,24 @@
 import netCDF4 as nc
 import xarray as xr
+#import xesmf as xe
 import numpy as np
 import scipy.sparse as sp
 from scipy.sparse.linalg import eigsh
 from scipy.linalg import eigh
 import matplotlib as mpl
 import matplotlib.pyplot as plt
+from scipy.interpolate import RegularGridInterpolator
+from matplotlib.colors import LinearSegmentedColormap
 mpl.use('Agg')
 
 #####################
 # INPUTS
 # Work directory
-work_dir           = "/work/cmcc/ag15419/basin_modes_sa/"
+work_dir           = "/work/cmcc/ag15419/basin_modes_sa_Afg/"
 # Num of modes to be analyzed
-mode_num           = 1000
+mode_num           = 500
 # The code starts to look for modes around the following period [h]
-reference_period   = 12
+reference_period   = 24
 # Order the modes from the smallest or from the greatest ('SM' or 'LM')
 eig_order          = 'LM'
 # Min val of the modes periods [h]
@@ -23,8 +26,8 @@ Tmin               = 2
 # Max val of the modes periods [h]
 Tmax               = 40
 # Consider only the modes whose amplitude is higher than Perc_Amp % of the highest amplitude value in a num of grid points higher than Counts_min 
-Perc_Amp           = 1
-Counts_min         = 200
+#Perc_Amp           = 0.001
+#Counts_min         = 1
 # Amplitude palette limits [-Plot_max,Plot_max] [%]
 Plot_max           = 100
 
@@ -40,8 +43,16 @@ outfile_R          = work_dir+'med_modes_'+str(mode_num)+'.nc'
 # If you want to compute the mode flag_compute_modes = 1 
 flag_compute_modes = 1
 
-# To test the code on the Adriatic Sea area set flag_only_adriatic = 1
-flag_only_adriatic = 0
+# To run the code on the Adriatic Sea area set flag_only_adriatic = 1
+flag_only_adriatic = 1
+
+# To set f term (1=rot+grav modes, 0=only gravitational contribution, 2=f cost+grav modes)
+flag_f             = 1
+
+# To use the original GEBCO bathy instead of the MedFS bathy with the 4000m cut (interpolation on the MedFS grid is required)
+flag_gebco_bathy   = 0
+gebco_bathy        = "/work/cmcc/ag15419/VAA_paper/DATA0/gebco_2024_n46.5_s30.0_w-19.0_e37.0.nc"
+gebco_bathy_int    = work_dir+'bathy_gebco_int.nc' 
 
 #####################
 def prepare_fields(meshmask_path, bathy_path):
@@ -54,14 +65,57 @@ def prepare_fields(meshmask_path, bathy_path):
     mask = ds_mask['tmask'].isel(t=0, z=0).values.astype(bool)
 
     # Bathymetry
-    bathy = ds_bathy['Bathymetry'].isel(time_counter=0).values
-    bathy = np.where(mask, bathy, np.nan)
+    if flag_gebco_bathy == 0:
+       bathy = ds_bathy['Bathymetry'].isel(time_counter=0).values
+       bathy = np.where(mask, bathy, np.nan)
+
+    elif flag_gebco_bathy == 1:
+        # 1) Leggo GEBCO
+        ds_gebco = xr.open_dataset(gebco_bathy)
+        bath_gebco = ds_gebco['elevation'].values
+        lat_gebco = ds_gebco['lat'].values
+        lon_gebco = ds_gebco['lon'].values
+        # Se lat decrescente, inverti
+        if lat_gebco[0] > lat_gebco[-1]:
+            lat_gebco = lat_gebco[::-1]
+            bath_gebco = bath_gebco[::-1, :]
+        # 2) Leggo mesh_mask NEMO
+        lat_nemo = ds_mask['nav_lat'].isel().values
+        lon_nemo = ds_mask['nav_lon'].isel().values
+        tmask = ds_mask['tmask'].isel(t=0, z=0).values
+        # 3) Interpolatore bilineare
+        interp_func = RegularGridInterpolator(
+            (lat_gebco, lon_gebco),
+            bath_gebco,
+            bounds_error=False,
+            fill_value=np.nan
+        )
+        # 4) Interpolazione sulla griglia NEMO
+        points = np.array([lat_nemo.flatten(), lon_nemo.flatten()]).T
+        bath_interp_flat = interp_func(points)
+        bath_new = bath_interp_flat.reshape(lat_nemo.shape)
+        # 5) Applico maschera: solo oceano
+        bath_new_masked = np.where(tmask == 1, -bath_new, np.nan)
+        # 6) Salvo la batimetria interpolata
+        ds_out = xr.Dataset(
+            {"Bathymetry": (("y", "x"), bath_new_masked)},
+            coords={"lon": (("y", "x"), lon_nemo),
+                    "lat": (("y", "x"), lat_nemo)}
+        )
+        ds_out.to_netcdf(gebco_bathy_int)
+        # 7) Bathy diventa la nuova 
+        bathy = bath_new_masked
 
     # Lat
     lat = ds_mask['nav_lat'].values
     # Coriolis f
     omega = 7.292115e-5  # rad/s
-    coriolis = 2 * omega * np.sin(np.deg2rad(lat))
+    if flag_f != 2:
+       coriolis = 2 * omega * np.sin(np.deg2rad(lat))
+    elif flag_f == 2:
+       lat_fix=lat*0+37.75
+       coriolis = 2 * omega * np.sin(np.deg2rad(lat_fix))
+       print ('Constant Coriolis:',coriolis)
 
     # Grid (dx, dy)
     dxt = ds_mask['e1t'].isel(t=0).values  # m
@@ -127,7 +181,10 @@ def build_operator_A(mask, bathy, coriolis, e1u, e2v, e1t, e2t, g=9.81):
         i, j = invmap[k]
         H = bathy[j, i]
         f = coriolis[j, i]
-        diag = - f**2  # termine rotazionale solo sulla diag
+        if flag_f != 0:
+           diag = - f**2  # termine rotazionale solo sulla diag
+        elif flag_f == 0:
+           diag = 0
 
         # Direzione x (U-points)
         for di in [-1, 1]:
@@ -176,7 +233,7 @@ def build_operator_A(mask, bathy, coriolis, e1u, e2v, e1t, e2t, g=9.81):
     print ('Prova',A)
     return A, mapping, invmap
 
-def compute_barotropic_modes(A, k=10, which='LM', reference_period=12):
+def compute_barotropic_modes(A, k=10, which='LM', reference_period=24):
     # Compute sigma (target eigenvalue)
     Tref_sec = reference_period * 3600
     omega_ref = 2 * np.pi / Tref_sec
@@ -296,6 +353,10 @@ def plot_mode(mode_2d, mask, title="", filename="mode.png", filename_abs="mode_a
     plt.contour(mask, levels=[0.5], colors='k', linewidths=0.5)
 
     # Plot
+    cmap_abs = mpl.cm.get_cmap(cmap_abs)
+    cmap_abs = truncate_colormap(cmap_abs, 0.05, 0.95)
+    cmap_abs.set_bad("white")
+
     im = plt.imshow(masked, cmap=cmap_abs, norm=norm)
     cbar = plt.colorbar(im, orientation='horizontal', ticks=levels[::2])
     cbar.set_label("Mode amplitude (%)")
@@ -366,6 +427,14 @@ def plot_mode(mode_2d, mask, title="", filename="mode.png", filename_abs="mode_a
 #        periods = ds.variables['period'][:]
 #    return amplitudes, phases, periods
 
+# Truncate the colormap to exclude the lightest part (e.g. bottom 20%)
+def truncate_colormap(cmap, minval=0.2, maxval=1.0, n=256):
+    new_cmap = LinearSegmentedColormap.from_list(
+        f"trunc({cmap.name},{minval:.2f},{maxval:.2f})",
+        cmap(np.linspace(minval, maxval, n))
+    )
+    return new_cmap
+
 ################### MAIN #############
 # Prepare input fields
 print ('Preparing input fields..')
@@ -383,18 +452,18 @@ mask[atlantic_mask] = 0
 if flag_only_adriatic == 1 :
    # cut the Thyrrenian box
    J, I = np.indices((ny, nx))
-   box_mask = (I < 820) & (J < 285)
+   box_mask = (I < 825) & (J < 285)
    mask[box_mask] = 0
    # Select the Adriatic Sea
    adriatic_mask = np.zeros_like(mask)
    i_min, i_max = 720, 920
-   j_min, j_max = 220, 380
+   j_min, j_max = 200, 380
    adriatic_mask[j_min:j_max, i_min:i_max] = mask[j_min:j_max, i_min:i_max]
    mask = adriatic_mask
 
 # Plot input fields
 print ('Plotting input fields..')
-plot_input_fields(np.squeeze(mask), np.squeeze(bathy), np.squeeze(coriolis), np.squeeze(dxt), np.squeeze(dyt), filename=work_dir+"input_fields"+str(mode_num)+".png")
+plot_input_fields(np.squeeze(mask), np.squeeze(bathy), np.squeeze(coriolis), np.squeeze(dxt), np.squeeze(dyt), filename=work_dir+"/input_fields"+str(mode_num)+".png")
 print ('Done!')
 
 ########### Real modes ##############3
@@ -423,11 +492,11 @@ if flag_compute_modes != 0 :
    print ('Done!')
 
    #print ('Select modes with a relevant amplitude')
-   Amax=np.nanmax(modes_2D)
-   print ('Max amplitude is:',Amax)
-   Th_Amp=Amax*Perc_Amp/100.0
-   print ('Amplitude threshold is:',Th_Amp)
-   print ('Done!')
+   #Amax=np.nanmax(modes_2D)
+   #print ('Max amplitude is:',Amax)
+   #Th_Amp=Amax*Perc_Amp/100.0
+   #print ('Amplitude threshold is:',Th_Amp)
+   #print ('Done!')
 
    print ('Save the R modes')
    save_modes_to_netcdf(outfile_R, modes_2D, period, mask=mask)
@@ -439,17 +508,36 @@ else:
    print ('Done!')
 
 print ('Plot the R modes amplitude')
-print ('Print only the modes with a relevant amplitude')
-for m in range(k):
-    if np.nanmax(modes_2D[m]) > Th_Amp:
-       counts = np.sum(modes_2D[m] > Th_Amp)
-       if counts > Counts_min: 
-          print ('Mode:',m,f'{period[m]:0.2f} h')
-          title    = f"Barotropic mode {m+1} - Period {period[m]:0.2f} h"
-          filename = f"/work/cmcc/ag15419/basin_modes_sa/mode_{m+1:02d}_{mode_num}.png"
-          filename_abs = f"/work/cmcc/ag15419/basin_modes_sa/mode_abs_{m+1:02d}_{mode_num}.png"
-          plot_mode(modes_2D[m], mask, title=title, filename=filename,filename_abs=filename_abs)
-print ('Done!')
+print ('Print and plot only the modes with a relevant amplitude')
+#for m in range(k):
+#    if np.nanmax(modes_2D[m]) > Th_Amp:
+#       counts = np.sum(modes_2D[m] > Th_Amp)
+#       if counts > Counts_min: 
+#          print ('Mode:',m,f'{period[m]:0.2f} h')
+#          title    = f"Barotropic mode {m+1} - Period {period[m]:0.2f} h"
+#          filename = f"/work/cmcc/ag15419/basin_modes_sa/mode_{m+1:02d}_{mode_num}.png"
+#          filename_abs = f"/work/cmcc/ag15419/basin_modes_sa/mode_abs_{m+1:02d}_{mode_num}.png"
+#          plot_mode(modes_2D[m], mask, title=title, filename=filename,filename_abs=filename_abs)
+#print ('Done!')
+
+# Ordina gli indici dei modi per periodo decrescente
+sorted_indices = np.argsort(-period)
+renum = 0  
+for m in sorted_indices:
+    max_amp = np.nanmax(modes_2D[m])
+    #if max_amp > Th_Amp:
+    #    counts = np.sum(modes_2D[m] > Th_Amp)
+    #    if counts > Counts_min:
+    this_period = period[m]
+    print ('Mode:',renum,f' Period: {this_period:.2f} h') 
+            
+    title = f"Barotropic mode {renum} - Period {this_period:.2f} h"
+    filename = f"{work_dir}/mode_{renum:02d}_{mode_num}_{this_period:.2f}h.png"
+    filename_abs = f"{work_dir}/mode_abs_{renum:02d}_{mode_num}_{this_period:.2f}h.png"
+            
+    plot_mode(modes_2D[m], mask, title=title, filename=filename, filename_abs=filename_abs)
+    renum += 1
+
 
 ########### Complex modes ############
 ## Compute or load complex modes
