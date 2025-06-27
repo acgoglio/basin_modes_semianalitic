@@ -14,7 +14,7 @@ mpl.use('Agg')
 #####################
 # INPUTS
 # Work directory
-work_dir           = "/work/cmcc/ag15419/basin_modes_sa_Afg/"
+work_dir           = "/work/cmcc/ag15419/basin_modes_sa_Ageb/"
 # Num of modes to be analyzed
 mode_num           = 500
 # The code starts to look for modes around the following period [h]
@@ -47,10 +47,10 @@ flag_compute_modes = 1
 flag_only_adriatic = 1
 
 # To set f term (1=rot+grav modes, 0=only gravitational contribution, 2=f cost+grav modes)
-flag_f             = 1
+flag_f             = 0
 
 # To use the original GEBCO bathy instead of the MedFS bathy with the 4000m cut (interpolation on the MedFS grid is required)
-flag_gebco_bathy   = 0
+flag_gebco_bathy   = 1
 gebco_bathy        = "/work/cmcc/ag15419/VAA_paper/DATA0/gebco_2024_n46.5_s30.0_w-19.0_e37.0.nc"
 gebco_bathy_int    = work_dir+'bathy_gebco_int.nc' 
 
@@ -332,7 +332,11 @@ def plot_mode(mode_2d, mask, title="", filename="mode.png", filename_abs="mode_a
     plt.title(title)
     plt.xlabel("i")
     plt.ylabel("j")
-    plt.xlim(300,1307)
+    if flag_only_adriatic == 1 :
+       plt.xlim(720, 920)
+       plt.ylim(380, 200)
+    else:
+       plt.xlim(300,1307)
     plt.gca().invert_yaxis()
     plt.tight_layout()
     plt.savefig(filename, dpi=dpi)
@@ -361,10 +365,18 @@ def plot_mode(mode_2d, mask, title="", filename="mode.png", filename_abs="mode_a
     cbar = plt.colorbar(im, orientation='horizontal', ticks=levels[::2])
     cbar.set_label("Mode amplitude (%)")
 
+    contour_levels = np.arange(0, Plot_max + 1, 10)  
+    CS = plt.contour(masked, levels=contour_levels, colors='k', linewidths=0.4)
+    plt.clabel(CS, inline=True, fontsize=6, fmt='%d%%')
+
     plt.title(title)
     plt.xlabel("i")
     plt.ylabel("j")
-    plt.xlim(300,1307)
+    if flag_only_adriatic == 1 :
+       plt.xlim(720, 920)
+       plt.ylim(380, 200)
+    else:
+       plt.xlim(300,1307)
     plt.gca().invert_yaxis()
     plt.tight_layout()
     plt.savefig(filename_abs, dpi=dpi)
@@ -452,7 +464,9 @@ mask[atlantic_mask] = 0
 if flag_only_adriatic == 1 :
    # cut the Thyrrenian box
    J, I = np.indices((ny, nx))
-   box_mask = (I < 825) & (J < 285)
+   box_mask = (I < 775) & (J < 285) #825 285
+   mask[box_mask] = 0
+   box_mask = (I < 825) & (J < 260) #825 285
    mask[box_mask] = 0
    # Select the Adriatic Sea
    adriatic_mask = np.zeros_like(mask)
