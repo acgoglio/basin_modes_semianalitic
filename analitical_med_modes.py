@@ -14,11 +14,11 @@ mpl.use('Agg')
 #####################
 # INPUTS
 # Work directory
-work_dir           = "/work/cmcc/ag15419/basin_modes_sa_Ageb/"
+work_dir           = "/work/cmcc/ag15419/basin_modes_sa_geb/"
 # Num of modes to be analyzed
 mode_num           = 500
 # The code starts to look for modes around the following period [h]
-reference_period   = 24
+reference_period   = 30
 # Order the modes from the smallest or from the greatest ('SM' or 'LM')
 eig_order          = 'LM'
 # Min val of the modes periods [h]
@@ -30,6 +30,8 @@ Tmax               = 40
 #Counts_min         = 1
 # Amplitude palette limits [-Plot_max,Plot_max] [%]
 Plot_max           = 100
+# Filter out modes with low amplitude, e.g. 0.10 means that all the modes with amplitude<10% of the total amplitude are rm (to avoid the filtering set amplitude_threshold_ratio = 0)
+amplitude_threshold_ratio=0.002
 
 # NEMO Mesh
 mesh_mask_file     = "/work/cmcc/ag15419/VAA_paper/DATA0/mesh_mask.nc"
@@ -41,10 +43,10 @@ outfile_R          = work_dir+'med_modes_'+str(mode_num)+'.nc'
 #outfile_C          = work_dir+'med_modes_'+str(mode_num)+'_C.nc'
 
 # If you want to compute the mode flag_compute_modes = 1 
-flag_compute_modes = 1
+flag_compute_modes = 0
 
 # To run the code on the Adriatic Sea area set flag_only_adriatic = 1
-flag_only_adriatic = 1
+flag_only_adriatic = 0
 
 # To set f term (1=rot+grav modes, 0=only gravitational contribution, 2=f cost+grav modes)
 flag_f             = 0
@@ -63,6 +65,8 @@ def prepare_fields(meshmask_path, bathy_path):
 
     # Land/sea mask
     mask = ds_mask['tmask'].isel(t=0, z=0).values.astype(bool)
+    lat_nemo = ds_mask['nav_lat'].isel().values
+    lon_nemo = ds_mask['nav_lon'].isel().values
 
     # Bathymetry
     if flag_gebco_bathy == 0:
@@ -178,6 +182,7 @@ def build_operator_A(mask, bathy, coriolis, e1u, e2v, e1t, e2t, g=9.81):
     rows, cols, data = [], [], []
 
     for k in range(N):
+        print ('K:',k)
         i, j = invmap[k]
         H = bathy[j, i]
         f = coriolis[j, i]
@@ -206,7 +211,9 @@ def build_operator_A(mask, bathy, coriolis, e1u, e2v, e1t, e2t, g=9.81):
                 # Scrivo i Valori fuori diagonale
                 data.append(coeff)    # Scrivo il termine non rot fuori diag
                 # Aggiorno i valori della diagonale (sottraendo dal termine rotazionale)
+                print ('diag prima x',diag)
                 diag = diag - coeff         # termine non rot sulla diagonale
+                print ('diag dopo x',diag)
 
         # Direzione y (V-points) - stessa cosa
         for dj in [-1, 1]:
@@ -221,7 +228,9 @@ def build_operator_A(mask, bathy, coriolis, e1u, e2v, e1t, e2t, g=9.81):
                 cols.append(n_idx)
                 data.append(coeff)    # Scrivo il termine non rot fuori diag
                 # Aggiorno i valori della diagonale (sottraendo dal termine rotazionale)
+                print ('diag prima y',diag)
                 diag = diag - coeff        # termine non rot sulla diagonale
+                print ('diag dopo y',diag)
 
         # Scrivo i valori calcolati per la diagonale
         rows.append(k)
@@ -300,14 +309,23 @@ def save_modes_to_netcdf(filename, modes_2D, periods, mask=None):
 
     print(f"Salvato file NetCDF: {filename}")
 
-def load_modes_from_netcdf(filename):
+def load_modes_from_netcdf(filename,meshmask_path):
+
+    # Open mesh_mask file
+    ds_mask = xr.open_dataset(meshmask_path, decode_times=False)
+    # Land/sea mask
+    mask = ds_mask['tmask'].isel(t=0, z=0).values.astype(bool)
+    lat_nemo = ds_mask['nav_lat'].isel().values
+    lon_nemo = ds_mask['nav_lon'].isel().values
+
+    # Open modes nc file
     with nc.Dataset(filename) as ds:
         modes_2D = ds.variables['modes'][:]
         periods = ds.variables['periods'][:]
         mask = ds.variables['mask'][:] if 'mask' in ds.variables else None
-    return modes_2D, periods, mask
+    return modes_2D, periods, mask, lon_nemo, lat_nemo
 
-def plot_mode(mode_2d, mask, title="", filename="mode.png", filename_abs="mode_abs.png", cmap="RdBu_r", cmap_abs="gist_stern_r", dpi=150, n_levels=51): 
+def plot_mode(mode_2d, mask, lon_nemo, lat_nemo, title="", filename="mode.png", filename_abs="mode_abs.png", cmap="RdBu_r", cmap_abs="gist_stern_r", dpi=150, n_levels=51): 
 
     plt.figure(figsize=(10, 6))
 
@@ -326,12 +344,15 @@ def plot_mode(mode_2d, mask, title="", filename="mode.png", filename_abs="mode_a
 
     # Plot
     im = plt.imshow(masked, cmap=cmap, norm=norm)
+    #im = plt.pcolormesh(lon_nemo, lat_nemo, masked, cmap=cmap, norm=norm, shading='auto')
     cbar = plt.colorbar(im, orientation='horizontal', ticks=levels[::2])
     cbar.set_label("Mode amplitude (%)")
 
     plt.title(title)
     plt.xlabel("i")
     plt.ylabel("j")
+    #plt.xlabel("lon")
+    #plt.ylabel("lat")
     if flag_only_adriatic == 1 :
        plt.xlim(720, 920)
        plt.ylim(380, 200)
@@ -356,31 +377,64 @@ def plot_mode(mode_2d, mask, title="", filename="mode.png", filename_abs="mode_a
     # Linea di costa (contorno della maschera)
     plt.contour(mask, levels=[0.5], colors='k', linewidths=0.5)
 
-    # Plot
-    cmap_abs = mpl.cm.get_cmap(cmap_abs)
-    cmap_abs = truncate_colormap(cmap_abs, 0.05, 0.95)
-    cmap_abs.set_bad("white")
+#    # Plot
+#    cmap_abs = mpl.cm.get_cmap(cmap_abs)
+#    cmap_abs = truncate_colormap(cmap_abs, 0.05, 0.95)
+#    cmap_abs.set_bad("white")
+#
+#    im = plt.imshow(masked, cmap=cmap_abs, norm=norm)
+#    cbar = plt.colorbar(im, orientation='horizontal', ticks=levels[::2])
+#    cbar.set_label("Mode amplitude (%)")
+#
+#    contour_levels = np.arange(0, Plot_max + 1, 10)  
+#    CS = plt.contour(masked, levels=contour_levels, colors='k', linewidths=0.4)
+#    plt.clabel(CS, inline=True, fontsize=6, fmt='%d%%')
+#
+#    plt.contourf(masked, levels=[-amplitude_threshold_ratio, amplitude_threshold_ratio], colors='white')
+#
+#    plt.title(title)
+#    plt.xlabel("i")
+#    plt.ylabel("j")
+#    if flag_only_adriatic == 1 :
+#       plt.xlim(720, 920)
+#       plt.ylim(380, 200)
+#    else:
+#       plt.xlim(300,1307)
+#    plt.gca().invert_yaxis()
+#    plt.tight_layout()
+#    plt.savefig(filename_abs, dpi=dpi)
+#    plt.close()
 
-    im = plt.imshow(masked, cmap=cmap_abs, norm=norm)
-    cbar = plt.colorbar(im, orientation='horizontal', ticks=levels[::2])
-    cbar.set_label("Mode amplitude (%)")
-
-    contour_levels = np.arange(0, Plot_max + 1, 10)  
-    CS = plt.contour(masked, levels=contour_levels, colors='k', linewidths=0.4)
-    plt.clabel(CS, inline=True, fontsize=6, fmt='%d%%')
-
-    plt.title(title)
-    plt.xlabel("i")
-    plt.ylabel("j")
-    if flag_only_adriatic == 1 :
-       plt.xlim(720, 920)
-       plt.ylim(380, 200)
-    else:
-       plt.xlim(300,1307)
-    plt.gca().invert_yaxis()
-    plt.tight_layout()
-    plt.savefig(filename_abs, dpi=dpi)
-    plt.close()
+     # Plot
+     cmap_abs = mpl.cm.get_cmap(cmap_abs)
+     cmap_abs = truncate_colormap(cmap_abs, 0.05, 0.95)
+     cmap_abs.set_bad("white")
+     
+     # Usa pcolormesh con lon/lat
+     im = plt.pcolormesh(lon_nemo, lat_nemo, masked, cmap=cmap_abs, norm=norm, shading='auto')
+     cbar = plt.colorbar(im, orientation='horizontal', ticks=levels[::2])
+     cbar.set_label("Mode amplitude (%)")
+     
+     contour_levels = np.arange(0, Plot_max + 1, 10)
+     CS = plt.contour(lon_nemo, lat_nemo, masked, levels=contour_levels, colors='k', linewidths=1)
+     plt.clabel(CS, inline=True, fontsize=12, fmt='%d%%')
+     
+     plt.contourf(lon_nemo, lat_nemo, masked, levels=[-amplitude_threshold_ratio, amplitude_threshold_ratio], colors='white')
+     
+     plt.title(title)
+     plt.xlabel("Longitude")
+     plt.ylabel("Latitude")
+     
+     if flag_only_adriatic == 1:
+         plt.xlim(lon_nemo.min(), lon_nemo.max())  # oppure un range specifico in gradi
+         plt.ylim(lat_nemo.min(), lat_nemo.max())
+     else:
+         plt.xlim(lon_nemo.min(), lon_nemo.max())
+         plt.ylim(lat_nemo.min(), lat_nemo.max())
+     
+     plt.tight_layout()
+     plt.savefig(filename_abs, dpi=dpi)
+     plt.close()
 
 #def build_complex_mode(eta1, eta2):
 #
@@ -518,7 +572,7 @@ if flag_compute_modes != 0 :
 
 else:
    print ('Load the R modes')
-   modes_2D, period, mask = load_modes_from_netcdf(outfile_R)
+   modes_2D, period, mask, nemo_lon, nemo_lat = load_modes_from_netcdf(outfile_R,mesh_mask_file)
    print ('Done!')
 
 print ('Plot the R modes amplitude')
@@ -549,7 +603,7 @@ for m in sorted_indices:
     filename = f"{work_dir}/mode_{renum:02d}_{mode_num}_{this_period:.2f}h.png"
     filename_abs = f"{work_dir}/mode_abs_{renum:02d}_{mode_num}_{this_period:.2f}h.png"
             
-    plot_mode(modes_2D[m], mask, title=title, filename=filename, filename_abs=filename_abs)
+    plot_mode(modes_2D[m], mask, nemo_lon, nemo_lat, title=title, filename=filename, filename_abs=filename_abs)
     renum += 1
 
 
