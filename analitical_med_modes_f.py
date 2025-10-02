@@ -15,11 +15,11 @@ mpl.use('Agg')
 #####################
 # INPUTS
 # Work directory
-work_dir           = "/work/cmcc/ag15419/basin_modes/basin_modes_sa_fg_new_4/"
+work_dir           = "/work/cmcc/ag15419/basin_modes/basin_modes_sa_fg_new_short/"
 # Num of modes to be analyzed
-mode_num           = 10
+mode_num           = 104
 # The code starts to look for modes around the following period [h]
-reference_period   = 30
+reference_period   = 38
 # Order the modes from the smallest or from the greatest ('SM' or 'LM')
 eig_order          = 'LM'
 # Min val of the modes periods [h]
@@ -118,13 +118,13 @@ def prepare_fields(meshmask_path, bathy_path):
     lat = ds_mask['nav_lat'].values
     # Coriolis f
     omega = 7.292115e-5  # rad/s
-    omega = 0.0 # TMP for debug!
+    #omega = 0.0 # TMP for debug!
     if flag_f != 2:
-       coriolis = 2 * omega * np.sin(np.deg2rad(lat))
+       coriolis = 2 * omega * np.sin(np.deg2rad(lat)) 
        print ('Coriolis:',coriolis)
     elif flag_f == 2:
        lat_fix=lat*0+37.75
-       coriolis = 2 * omega * np.sin(np.deg2rad(lat_fix))
+       coriolis = 2 * omega * np.sin(np.deg2rad(lat_fix)) 
        print ('Constant Coriolis:',coriolis)
 
     # Grid (dx, dy)
@@ -305,55 +305,68 @@ def build_operator_K(mask_t, mask_u, mask_v, bathy, coriolis, e1u, e2v, e1t, e2t
 
     # Blocco K_12 = f * v
     rows_k12, cols_k12, data_k12 = [], [], []
-
+    
     for k_u in range(N_u):
         i, j = invmap_u[k_u]
         if not mask_u[j, i]:
             continue
-
-        # f interpolata al punto u (media lungo x)
+    
+        # f interpolata al punto u
         f_u = 0.5 * (coriolis[j, i] + coriolis[j, i+1])
-
-        # v vicini (4 punti) a nord/sud e sx/dx del punto u
+    
+        # v vicini (4 punti) attorno a u
         v_indices = [
-            (i, j),       # nord-ovest
-            (i+1, j),     # nord-est
-            (i, j-1),     # sud-ovest
-            (i+1, j-1)    # sud-est
+            (i, j),
+            (i+1, j),
+            (i, j-1),
+            (i+1, j-1)
         ]
-
+    
+        # Conta solo i punti validi e distribuisci peso corretto
+        valid_v = []
         for vi, vj in v_indices:
             if 0 <= vi < nx_v and 0 <= vj < ny_v and mask_v[vj, vi]:
                 k_v = mapping_v[(vi, vj)]
-                rows_k12.append(offset_u + k_u)      # riga = u
-                cols_k12.append(offset_v + k_v)      # colonna = v
-                data_k12.append(f_u * 0.25)
+                valid_v.append(k_v)
+    
+        n = len(valid_v)
+        if n > 0:
+            for k_v in valid_v:
+                rows_k12.append(offset_u + k_u)
+                cols_k12.append(offset_v + k_v)
+                data_k12.append(f_u / n)   # peso uniforme sui punti validi
 
     # Blocco K_21 = - f * u
     rows_k21, cols_k21, data_k21 = [], [], []
-
+    
     for k_v in range(N_v):
         i, j = invmap_v[k_v]
         if not mask_v[j, i]:
             continue
-
-        # f interpolata al punto v (media lungo y)
+    
+        # f interpolata al punto v
         f_v = 0.5 * (coriolis[j, i] + coriolis[j+1, i])
-
-        # u vicini (4 punti intorno a v)
+    
+        # u vicini (4 punti) attorno a v
         u_indices = [
-            (i, j),       # sud-ovest
-            (i, j+1),     # nord-ovest
-            (i-1, j),     # sud-est
-            (i-1, j+1)    # nord-est
+            (i, j),
+            (i, j+1),
+            (i-1, j),
+            (i-1, j+1)
         ]
-
+    
+        valid_u = []
         for ui, uj in u_indices:
             if 0 <= ui < nx_u and 0 <= uj < ny_u and mask_u[uj, ui]:
                 k_u = mapping_u[(ui, uj)]
-                rows_k21.append(offset_v + k_v)      # riga = v
-                cols_k21.append(offset_u + k_u)      # colonna = u
-                data_k21.append(-0.25 * f_v)
+                valid_u.append(k_u)
+    
+        n = len(valid_u)
+        if n > 0:
+            for k_u in valid_u:
+                rows_k21.append(offset_v + k_v)
+                cols_k21.append(offset_u + k_u)
+                data_k21.append(-f_v / n)
 
     # Blocco K_13 = -g * (d eta / dx) con convenzione finale
     rows_k13, cols_k13, data_k13 = [], [], []
@@ -457,6 +470,55 @@ def build_operator_K(mask_t, mask_u, mask_v, bathy, coriolis, e1u, e2v, e1t, e2t
     N = N_u + N_v + N_t
     K = sp.csr_matrix((data_all, (rows_all, cols_all)), shape=(N, N))
 
+    # Diagnostica K
+    # --- Debug: statistiche e primi elementi di tutti i blocchi ---
+    blocks = {
+        "K_12": (rows_k12, cols_k12, data_k12),
+        "K_21": (rows_k21, cols_k21, data_k21),
+        "K_13": (rows_k13, cols_k13, data_k13),
+        "K_23": (rows_k23, cols_k23, data_k23),
+        "K_31": (rows_k31, cols_k31, data_k31),
+        "K_32": (rows_k32, cols_k32, data_k32),
+    }
+    
+    for name, (rows, cols, data) in blocks.items():
+        data = np.array(data)
+        print(f"\n--- {name} ---")
+        print(f"Numero elementi: {len(data)}")
+        print(f"Min: {data.min():.4e}, Max: {data.max():.4e}, Mean: {data.mean():.4e}")
+        print(f"Primi 10 elementi (riga,colonna,valore):")
+        for idx in range(min(10, len(data))):
+            print(f"{rows[idx]},{cols[idx]},{data[idx]:.4e}")
+    
+    # Controllo generale della matrice completa
+    K_data = K.data
+    print(f"\nMatrice completa K: min {K_data.min():.4e}, max {K_data.max():.4e}, mean {K_data.mean():.4e}, nnz {K.nnz}")
+
+    # --- Diagnostic K ---
+    print("\n--- K diagnostics ---")
+    print(f"Shape of K: {K.shape}, nnz: {K.nnz}")
+    print(f"Min / Max / Mean of K: {K.data.min():.3e} / {K.data.max():.3e} / {K.data.mean():.3e}")
+    
+    # Controllo righe più “dense”
+    row_nnz = np.diff(K.indptr)
+    print(f"Righe con più elementi non zero: max {row_nnz.max()}, min {row_nnz.min()}, mean {row_nnz.mean():.1f}")
+    
+    # Controllo valori assoluti per righe specifiche (es. primo blocco u)
+    first_rows = row_nnz[:10]
+    print("Primi 10 valori nnz per righe:", first_rows)
+    
+    # Stampa qualche elemento u-v per verifica
+    print("Primi 10 elementi K (riga, colonna, valore):")
+    rows, cols = K.nonzero()
+    for r, c in zip(rows[:10], cols[:10]):
+        print(r, c, K[r, c])
+
+    asym = K - K.T
+    print("Norma parte asimmetrica:", sp.linalg.norm(asym))
+    print("Norma K:", sp.linalg.norm(K))
+    print("Rapporto:", sp.linalg.norm(asym)/sp.linalg.norm(K))
+    # Fine diagnostica K
+
     return K, mapping_u, mapping_v, mapping_t, invmap_t, invmap_u, invmap_v
 
 
@@ -506,12 +568,6 @@ def compute_barotropic_modes_K_eta_only(K, mask_t, mask_u, mask_v, k=10, which='
     # --- FILTRO sugli autovalori ---
     offset_eta = mask_u.sum() + mask_v.sum()  # offset globale per eta
     eta_modes = eigvecs[offset_eta:offset_eta + N_t, :]  # Estraggo SOLO eta
-    #offset_u = 0
-    #N_u = mask_u.sum()
-    #eta_modes = eigvecs[offset_u:offset_u + N_u, :] # Estraggo SOLO u
-    #offset_v = mask_u.sum()
-    #N_v = mask_v.sum()
-    #eta_modes = eigvecs[offset_v:offset_v + N_v, :] # Estraggo SOLO v
 
     omega = -1j * eigvals  # Calcolo omega = -i lambda
 
@@ -530,6 +586,9 @@ def compute_barotropic_modes_K_eta_only(K, mask_t, mask_u, mask_v, k=10, which='
     #eta_modes = eta_modes[:, mask_pos]
     #n_after_pos = eta_modes.shape[1]
     #print(f"Filtro omega positiva: rimossi {n_before_pos - n_after_pos} modi su {n_before_pos}")
+
+    # Tengo solo la parte reale
+    omega = np.real(omega)
 
     # Periodi in ore
     period = 2 * np.pi / omega / 3600
@@ -603,9 +662,9 @@ def plot_mode(mode_2d, mask, lon_nemo, lat_nemo, title="", filename="mode.png", 
     plt.figure(figsize=(10, 4))
 
     # Normalizza a 100 sul valore massimo o sul 99th percentile
-    #norm_mode = np.abs(mode_2d) / np.nanmax(np.abs(mode_2d)) * 100
-    p99 = np.nanpercentile(np.abs(mode_2d), 99)
-    norm_mode = np.abs(mode_2d) / p99 * 100
+    norm_mode = np.abs(mode_2d) / np.nanmax(np.abs(mode_2d)) * 100
+    #p99 = np.nanpercentile(np.abs(mode_2d), 99)
+    #norm_mode = np.abs(mode_2d) / p99 * 100
 
     # Applica la maschera
     masked = np.ma.masked_where(~mask.astype(bool), norm_mode)
