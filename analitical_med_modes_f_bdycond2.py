@@ -15,9 +15,9 @@ mpl.use('Agg')
 #####################
 # INPUTS
 # Work directory
-work_dir           = "/work/cmcc/ag15419/basin_modes_new/basin_modes_sa_oldsel_g0/"
+work_dir           = "/work/cmcc/ag15419/basin_modes_new/basin_modes_sa_newbdy2/"
 # Num of modes to be analyzed
-mode_num           = 10
+mode_num           = 110
 # The code starts to look for modes around the following period [h]
 reference_period   = 10
 # Order the modes from the smallest or from the greatest ('SM' or 'LM')
@@ -247,8 +247,6 @@ def build_operator_A(mask, bathy, coriolis, e1u, e2v, e1t, e2t, g=9.81):
 # Rot case (K X = lambda X,  X = (u,v,eta) )
 def build_operator_K(mask_t, mask_u, mask_v, bathy, coriolis, e1u, e2v, e1t, e2t, g=9.81):
 
-    #g=0 # TMP
-
     # Build the K structure based on t, u and v grids
 
     # K Matrix structure
@@ -398,7 +396,7 @@ def build_operator_K(mask_t, mask_u, mask_v, bathy, coriolis, e1u, e2v, e1t, e2t
         if not mask_v[j, i]:
             continue
 
-        # punti η a nord e al punto stesso
+        # punti t a nord e al punto stesso
         if j+1 < ny_t and mask_t[j, i] and mask_t[j+1, i]:
             k_eta_north = mapping_t[(i, j+1)]
             k_eta_south = mapping_t[(i, j)]
@@ -419,7 +417,7 @@ def build_operator_K(mask_t, mask_u, mask_v, bathy, coriolis, e1u, e2v, e1t, e2t
         if not mask_t[j, i]:
             continue
 
-        # due punti u vicini a η: u a destra e u a sinistra
+        # due punti u vicini a t: u a destra e u a sinistra
         u_indices = [(i, j), (i-1, j)]
         for idx, (ui, uj) in enumerate(u_indices):
             if 0 <= ui < nx_u and 0 <= uj < ny_u and mask_u[uj, ui]:
@@ -433,7 +431,7 @@ def build_operator_K(mask_t, mask_u, mask_v, bathy, coriolis, e1u, e2v, e1t, e2t
                     H_val = 0.5 * (bathy[j, i] + bathy[j, i-1])
                     coeff = + H_val / e1t[j, i]
 
-                rows_k31.append(offset_eta + k_eta)    # riga = η
+                rows_k31.append(offset_eta + k_eta)    # riga = t
                 cols_k31.append(offset_u + k_u)        # colonna = u
                 data_k31.append(coeff)
 
@@ -445,7 +443,7 @@ def build_operator_K(mask_t, mask_u, mask_v, bathy, coriolis, e1u, e2v, e1t, e2t
         if not mask_t[j, i]:
             continue
 
-        # due punti v vicini a η: v a nord e v a sud
+        # due punti v vicini a t: v a nord e v a sud
         v_indices = [(i, j), (i, j-1)]
         for idx, (vi, vj) in enumerate(v_indices):
             if 0 <= vi < nx_v and 0 <= vj < ny_v and mask_v[vj, vi]:
@@ -459,7 +457,7 @@ def build_operator_K(mask_t, mask_u, mask_v, bathy, coriolis, e1u, e2v, e1t, e2t
                     H_val = 0.5 * (bathy[j, i] + bathy[j-1, i])
                     coeff = + H_val / e2t[j, i]
 
-                rows_k32.append(offset_eta + k_eta)    # riga = η
+                rows_k32.append(offset_eta + k_eta)    # riga = t
                 cols_k32.append(offset_v + k_v)        # colonna = v
                 data_k32.append(coeff)
 
@@ -599,16 +597,64 @@ def compute_barotropic_modes_K_eta_only(K, mask_t, mask_u, mask_v, k=10, which='
     print(f"Filtro omega positiva: rimossi {n_before_pos - n_after_pos} modi su {n_before_pos}")
 
     # Tengo solo i modi gravitazionali (quelli con |g|/(|u|+|v|) > Threshold )
-    n_before_g = eta_modes.shape[1]
-    grav_ratio = np.linalg.norm(eta_modes, axis=0) / (np.linalg.norm(u_modes, axis=0) + np.linalg.norm(v_modes, axis=0))
-    grav_threshold = 0.1  #
-    grav_mask = grav_ratio > grav_threshold
-    omega   = omega[grav_mask]
-    eta_modes = eta_modes[:, grav_mask]
-    u_modes = u_modes[:, grav_mask]
-    v_modes = v_modes[:, grav_mask]
-    n_after_g = eta_modes.shape[1]
-    print(f"Filtro modi gravitazionali: rimossi {n_before_g - n_after_g} modi su {n_before_g}")
+    #n_before_g = eta_modes.shape[1]
+    #grav_ratio = np.linalg.norm(eta_modes, axis=0) / (np.linalg.norm(u_modes, axis=0) + np.linalg.norm(v_modes, axis=0))
+    #grav_threshold = 0.1  #
+    #grav_mask = grav_ratio > grav_threshold
+    #omega   = omega[grav_mask]
+    #eta_modes = eta_modes[:, grav_mask]
+    #u_modes = u_modes[:, grav_mask]
+    #v_modes = v_modes[:, grav_mask]
+    #n_after_g = eta_modes.shape[1]
+    #print(f"Filtro modi gravitazionali: rimossi {n_before_g - n_after_g} modi su {n_before_g}")
+
+    # FILTRO sulle bdy cond. di u e v
+    n_before_bdy = eta_modes.shape[1]
+    # Analizzo i punti di costa a est ed ovest
+    coast_u_east_west = []
+    for j in range(mask_u.shape[0]):
+        for i in range(mask_u.shape[1]):
+            # Se il punto e' mare
+            if mask_u[j,i]:
+                # Se il punto di mare ha a est o ad ovest terra (o se e' l'ultima cella del dominio)
+                if (i == 0 or i == mask_u.shape[1]-1 or 
+                    (i>0 and not mask_u[j,i-1]) or (i<mask_u.shape[1]-1 and not mask_u[j,i+1])):
+                    # Creo una lista dei punti lungo costa con costa a est o ad ovest:
+                    coast_u_east_west.append(mapping_u[(i,j)])
+    # Analizzo i punti di costa a nord e sud
+    coast_v_north_south = []
+    for j in range(mask_v.shape[0]):
+        for i in range(mask_v.shape[1]):
+            # Se il punto e' mare 
+            if mask_v[j,i]:
+                # Se il punto di mare ha a nord o a sud terra (o se e' l'ultima cella del dominio)
+                if (j == 0 or j == mask_v.shape[0]-1 or 
+                    (j>0 and not mask_v[j-1,i]) or (j<mask_v.shape[0]-1 and not mask_v[j+1,i])):
+                    # Creo una lista dei punti lungo costa con costa a nord o a sud
+                    coast_v_north_south.append(mapping_v[(i,j)])
+
+    # Creo una maschera dei modi da tenere (iniziallizandola a tutti true)
+    valid_mask = np.ones(eta_modes.shape[1], dtype=bool)
+    # Scorro sui modi 
+    for k in range(eta_modes.shape[1]):
+        u_field = u_modes[:, k]
+        v_field = v_modes[:, k]
+        # Se u e' piccolo lungo coste est o ovest metto False al modo
+        if np.any(np.abs(u_field[coast_u_east_west]) > 5e-2):
+            valid_mask[k] = False
+            # Se questo modo e False inutile che controlli anche per v e quindi salto al prossimo k
+            #continue
+        # Se v piccolo lungo coste nord o sud metto False al modo
+        if np.any(np.abs(v_field[coast_v_north_south]) > 5e-2):
+            valid_mask[k] = False
+
+    # Applica il filtro
+    omega     = omega[valid_mask]
+    eta_modes = eta_modes[:,valid_mask]
+    u_modes   = u_modes[:,valid_mask]
+    v_modes   = v_modes[:,valid_mask]
+    n_after_bdy = eta_modes.shape[1]
+    print(f"Filtro bdy condition: rimossi {n_before_bdy - n_after_bdy} modi su {n_before_bdy}")
 
     # Tengo solo la parte reale
     omega = np.real(omega)

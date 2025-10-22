@@ -14,11 +14,11 @@ mpl.use('Agg')
 #####################
 # INPUTS
 # Work directory
-work_dir           = "/work/cmcc/ag15419/basin_modes_sa_g/"
+work_dir           = "/work/cmcc/ag15419/basin_modes_new/basin_modes_sa_oldcode_g/"
 # Num of modes to be analyzed
-mode_num           = 500
+mode_num           = 10
 # The code starts to look for modes around the following period [h]
-reference_period   = 30
+reference_period   = 10
 # Order the modes from the smallest or from the greatest ('SM' or 'LM')
 eig_order          = 'LM'
 # Min val of the modes periods [h]
@@ -239,7 +239,7 @@ def build_operator_A(mask, bathy, coriolis, e1u, e2v, e1t, e2t, g=9.81):
 
     A = sp.csr_matrix((data, (rows, cols)), shape=(N, N))
     #print("A symmetric?", (A - A.T).nnz == 0)
-    #print ('Prova',A)
+    print ('Prova',A)
     return A, mapping, invmap
 
 def compute_barotropic_modes(A, k=10, which='LM', reference_period=24):
@@ -330,7 +330,10 @@ def plot_mode(mode_2d, mask, lon_nemo, lat_nemo, title="", filename="mode.png", 
     plt.figure(figsize=(10, 6))
 
     # Normalizza a 100
-    norm_mode = mode_2d / np.nanmax(np.abs(mode_2d)) * 100
+    #norm_mode = mode_2d / np.nanmax(np.abs(mode_2d)) * 100
+    p99 = np.nanpercentile(np.abs(mode_2d), 99)
+    norm_mode = mode_2d / p99 * 100
+
 
     # Applica maschera
     masked = np.ma.masked_where(~mask.astype(bool), norm_mode)
@@ -364,7 +367,10 @@ def plot_mode(mode_2d, mask, lon_nemo, lat_nemo, title="", filename="mode.png", 
 
     #########
     # Abs plot
-    plt.figure(figsize=(10, 4))
+    if flag_only_adriatic == 1:
+       plt.figure(figsize=(5, 4))
+    else:
+       plt.figure(figsize=(10, 4))
 
     # Prendo abs 
     masked=np.abs(masked)    
@@ -380,7 +386,7 @@ def plot_mode(mode_2d, mask, lon_nemo, lat_nemo, title="", filename="mode.png", 
      
     # Usa pcolormesh con lon/lat
     im = plt.pcolormesh(lon_nemo, lat_nemo, masked, cmap=cmap_abs, norm=norm, shading='auto')
-    cbar = plt.colorbar(im, orientation='vertical') #, ticks=levels[::2])
+    cbar = plt.colorbar(im) #, orientation='vertical') #, ticks=levels[::2])
     cbar.set_label("Mode Amplitude (%)")
      
     contour_levels = np.arange(0, Plot_max, 10)
@@ -401,8 +407,8 @@ def plot_mode(mode_2d, mask, lon_nemo, lat_nemo, title="", filename="mode.png", 
     plt.ylabel("Latitude")
      
     if flag_only_adriatic == 1:
-         plt.xlim(lon_nemo.min(), lon_nemo.max())  # Scrivi l'equivalente in gradi dell'intervallo di indici (380, 200)
-         plt.ylim(lat_nemo.min(), lat_nemo.max())  # Scrivi l'equivalente in gradi dell'intervallo di indici (720, 920)
+         plt.xlim(12,20)
+         plt.ylim(39,46)
     else:
          plt.xlim(-6.000, lon_nemo.max())
          plt.ylim(lat_nemo.min(), lat_nemo.max())
@@ -490,19 +496,19 @@ atlantic_mask = (I < 300) | ((I < 415) & (J > 250))
 mask[atlantic_mask] = 0
 
 # Mask also all the subregions except from the Adriatic Sea (temporary for test)
-if flag_only_adriatic == 1 :
-   # cut the Thyrrenian box
-   J, I = np.indices((ny, nx))
-   box_mask = (I < 775) & (J < 285) #825 285
-   mask[box_mask] = 0
-   box_mask = (I < 825) & (J < 260) #825 285
-   mask[box_mask] = 0
-   # Select the Adriatic Sea
-   adriatic_mask = np.zeros_like(mask)
-   i_min, i_max = 720, 920
-   j_min, j_max = 200, 380
-   adriatic_mask[j_min:j_max, i_min:i_max] = mask[j_min:j_max, i_min:i_max]
-   mask = adriatic_mask
+#if flag_only_adriatic == 1 :
+#   # cut the Thyrrenian box
+#   J, I = np.indices((ny, nx))
+#   box_mask = (I < 775) & (J < 285) #825 285
+#   mask[box_mask] = 0
+#   box_mask = (I < 825) & (J < 260) #825 285
+#   mask[box_mask] = 0
+#   # Select the Adriatic Sea
+#   adriatic_mask = np.zeros_like(mask)
+#   i_min, i_max = 720, 920
+#   j_min, j_max = 200, 380
+#   adriatic_mask[j_min:j_max, i_min:i_max] = mask[j_min:j_max, i_min:i_max]
+#   mask = adriatic_mask
 
 # Plot input fields
 print ('Plotting input fields..')
