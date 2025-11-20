@@ -16,7 +16,7 @@ mpl.use('Agg')
 # Work directory
 work_dir           = "/work/cmcc/ag15419/basin_modes_new/basin_modes_sa_oldcode_g/"
 # Num of modes to be analyzed
-mode_num           = 10
+mode_num           = 99
 # The code starts to look for modes around the following period [h]
 reference_period   = 10
 # Order the modes from the smallest or from the greatest ('SM' or 'LM')
@@ -46,7 +46,7 @@ outfile_R          = work_dir+'med_modes_'+str(mode_num)+'.nc'
 flag_compute_modes = 1
 
 # To run the code on the Adriatic Sea area set flag_only_adriatic = 1
-flag_only_adriatic = 0
+flag_only_adriatic = 1
 
 # To set f term (1=rot+grav modes, 0=only gravitational contribution, 2=f cost+grav modes)
 flag_f             = 0
