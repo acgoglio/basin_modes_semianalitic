@@ -15,7 +15,7 @@ mpl.use('Agg')
 #####################
 # INPUTS
 # Work directory
-work_dir           = "/work/cmcc/ag15419/basin_modes_new/basin_modes_sa_mod2/"
+work_dir           = "/work/cmcc/ag15419/basin_modes_new/basin_modes_sa_mod2_nos/"
 # Num of modes to be analyzed
 mode_num           = 120
 # The code starts to look for modes around the following period [h]
@@ -45,8 +45,11 @@ outfile_R          = work_dir+'med_modes_'+str(mode_num)+'.nc'
 # If you want to compute the mode flag_compute_modes = 1 
 flag_compute_modes = 0
 
+# If you want to apply the no-slip conditions ( e.g. current // to the coast = 0 ) set flag_no-slip = 1
+flag_noslip = 1
+
 # To plot only the Adriatic Sea area set flag_only_adriatic = 1
-flag_only_adriatic = 1
+flag_only_adriatic = 0
 
 # To set f term (1=rot+grav modes, 0=only gravitational contribution, 2=f cost+grav modes)
 flag_f             = 1
@@ -610,7 +613,7 @@ def compute_barotropic_modes_K_eta_only(K, mask_t, mask_u, mask_v, k=10, which='
 
     # FILTRO sulle bdy cond. di u e v
     n_before_bdy = eta_modes.shape[1]
-    # Analizzo i punti di costa a est ed ovest
+    # Analizzo i punti di costa a est ed ovest per u
     coast_u_east_west = []
     for j in range(mask_u.shape[0]):
         for i in range(mask_u.shape[1]):
@@ -621,7 +624,7 @@ def compute_barotropic_modes_K_eta_only(K, mask_t, mask_u, mask_v, k=10, which='
                     (i>0 and not mask_u[j,i-1]) or (i<mask_u.shape[1]-1 and not mask_u[j,i+1])):
                     # Creo una lista dei punti lungo costa con costa a est o ad ovest:
                     coast_u_east_west.append(mapping_u[(i,j)])
-    # Analizzo i punti di costa a nord e sud
+    # Analizzo i punti di costa a nord e sud per v
     coast_v_north_south = []
     for j in range(mask_v.shape[0]):
         for i in range(mask_v.shape[1]):
@@ -633,19 +636,47 @@ def compute_barotropic_modes_K_eta_only(K, mask_t, mask_u, mask_v, k=10, which='
                     # Creo una lista dei punti lungo costa con costa a nord o a sud
                     coast_v_north_south.append(mapping_v[(i,j)])
 
+    # Nel caso voglia imporre anche la condizione di no-slip (velocita' parallela alla costa = 0 )
+    # Devo analizzare anche i punti di costa a est ed ovest per u 
+    # e i punti di costa a nord e sud per u
+    if flag_noslip == 1:
+       # Analizzo i punti di costa a est ed ovest per v
+       coast_v_east_west = []
+       for j in range(mask_v.shape[0]):
+           for i in range(mask_v.shape[1]):
+               # Se il punto e' mare
+               if mask_v[j,i]:
+                   # Se il punto di mare ha a est o ad ovest terra (o se e' l'ultima cella del dominio)
+                   if (i == 0 or i == mask_v.shape[1]-1 or
+                       (i>0 and not mask_v[j,i-1]) or (i<mask_v.shape[1]-1 and not mask_v[j,i+1])):
+                       # Creo una lista dei punti lungo costa con costa a est o ad ovest:
+                       coast_v_east_west.append(mapping_v[(i,j)])
+       # Analizzo i punti di costa a nord e sud per u
+       coast_u_north_south = []
+       for j in range(mask_u.shape[0]):
+           for i in range(mask_u.shape[1]):
+               # Se il punto e' mare
+               if mask_u[j,i]:
+                   # Se il punto di mare ha a nord o a sud terra (o se e' l'ultima cella del dominio)
+                   if (j == 0 or j == mask_u.shape[0]-1 or
+                       (j>0 and not mask_u[j-1,i]) or (j<mask_u.shape[0]-1 and not mask_u[j+1,i])):
+                       # Creo una lista dei punti lungo costa con costa a nord o a sud
+                       coast_u_north_south.append(mapping_u[(i,j)])
+
+
     # Creo una maschera dei modi da tenere (iniziallizandola a tutti true)
     valid_mask = np.ones(eta_modes.shape[1], dtype=bool)
     # Scorro sui modi 
     for k in range(eta_modes.shape[1]):
         u_field = u_modes[:, k]
         v_field = v_modes[:, k]
-        # Se u e' piccolo lungo coste est o ovest metto False al modo
-        if np.any(np.abs(u_field[coast_u_east_west]) > 5e-2):
+        # Se u e' grande lungo coste est o ovest metto False al modo (oppure se u e v sono grandi per no-slip case)
+        if np.any(np.abs(u_field[coast_u_east_west]) > 5e-2) or ( flag_noslip == 1 and np.any(np.abs(v_field[coast_v_east_west]) > 5e-2)):
             valid_mask[k] = False
             # Se questo modo e False inutile che controlli anche per v e quindi salto al prossimo k
-            #continue
-        # Se v piccolo lungo coste nord o sud metto False al modo
-        if np.any(np.abs(v_field[coast_v_north_south]) > 5e-2):
+            continue
+        # Se v grande lungo coste nord o sud metto False al modo (oppure se u e v sono grandi per no-slip case)
+        if np.any(np.abs(v_field[coast_v_north_south]) > 5e-2) or (flag_noslip == 1 and np.any(np.abs(u_field[coast_u_north_south]) > 5e-2))  :
             valid_mask[k] = False
 
     # Applica il filtro
