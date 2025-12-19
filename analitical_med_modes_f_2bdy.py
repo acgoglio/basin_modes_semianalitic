@@ -15,7 +15,9 @@ mpl.use('Agg')
 #####################
 # INPUTS
 # Work directory
-work_dir           = "/work/cmcc/ag15419/basin_modes_new/basin_modes_sa_mod2_nos/"
+work_dir           = "/work/cmcc/ag15419/basin_modes_new/basin_modes_sa_mod4/"
+#"/work/cmcc/ag15419/basin_modes_new/basin_modes_sa_mod2_onlyetabdy/"
+
 # Num of modes to be analyzed
 mode_num           = 120
 # The code starts to look for modes around the following period [h]
@@ -43,7 +45,13 @@ bathy_meter_file   = "/work/cmcc/ag15419/VAA_paper/DATA0/bathy_meter.nc"
 outfile_R          = work_dir+'med_modes_'+str(mode_num)+'.nc'
 
 # If you want to compute the mode flag_compute_modes = 1 
-flag_compute_modes = 0
+flag_compute_modes = 1
+
+# If you wan to apply one or both the boundary conditions on velocities and/or on eta
+# To set U and V normal to the bdy = 0 => flag_uv_bdy=1 
+flag_uv_bdy = 1
+# To apply the bdy conditions on eta => flag_eta_bdy=1
+flag_eta_bdy = 1
 
 # If you want to apply the no-slip conditions ( e.g. current // to the coast = 0 ) set flag_no-slip = 1
 flag_noslip = 1
@@ -247,15 +255,19 @@ def build_operator_A(mask, bathy, coriolis, e1u, e2v, e1t, e2t, g=9.81):
     #print("A symmetric?", (A - A.T).nnz == 0)
     return A, mapping, invmap
 
-# Rot case (K X = lambda X,  X = (u,v,eta) )
+# Rotation case (K X = lambda X,  X = (u,v,eta) )
 def build_operator_K(mask_t, mask_u, mask_v, bathy, coriolis, e1u, e2v, e1t, e2t, g=9.81):
 
     # Build the K structure based on t, u and v grids
-
     # K Matrix structure
     #     K_11 K_12 K_13
     # K = K_21 K_22 K_23
     #     K_31 K_32 K_33
+
+    # Save also deta/dx and deta/dy in case we want to apply the bdy condition also on eta
+    # these are based on the t grid
+    deta_dx_rows, deta_dx_cols, deta_dx_data = [], [], []
+    deta_dy_rows, deta_dy_cols, deta_dy_data = [], [], []
 
     # Read grids parameters
     ny_t, nx_t = mask_t.shape
@@ -554,7 +566,7 @@ def compute_barotropic_modes(A, k=10, which='LM', reference_period=24):
 
 
 # Rot case
-def compute_barotropic_modes_K_eta_only(K, mask_t, mask_u, mask_v, k=10, which='LM', reference_period=24, tol_imag=1e-6):
+def compute_barotropic_modes_K_eta_only(K, mask_t, mask_u, mask_v, e1u, e2v,  e1t, e2t, bathy, k=10, which='LM', reference_period=24, tol_imag=1e-6, g=9.81):
 
     N_t = mask_t.sum()  # numero di punti mare sulla griglia eta
     N_u = mask_u.sum()  # numero di punti mare sulla griglia u
@@ -579,17 +591,7 @@ def compute_barotropic_modes_K_eta_only(K, mask_t, mask_u, mask_v, k=10, which='
 
     omega = -1j * eigvals  # Calcolo omega = -i lambda
 
-    # Tengo solo valori con parte immaginaria piccola rispetto alla parte reale
-    #n_before_im = eta_modes.shape[1]
-    #valid = np.abs(np.imag(omega)) < tol_imag * np.abs(np.real(omega))
-    #omega = np.real(omega[valid])
-    #eta_modes = eta_modes[:, valid]
-    #u_modes = u_modes[:, valid]
-    #v_modes = v_modes[:, valid] 
-    #n_after_im = eta_modes.shape[1]
-    #print(f"Filtro parte immaginaria: rimossi {n_before_im - n_after_im} modi su {n_before_im}")
-
-    # Tengo solo omega positiva
+    # Tengo solo omega positiva (ottengo coppie di valori +- omega)
     n_before_pos = eta_modes.shape[1]
     mask_pos = omega > 0
     omega = omega[mask_pos]
@@ -599,21 +601,11 @@ def compute_barotropic_modes_K_eta_only(K, mask_t, mask_u, mask_v, k=10, which='
     n_after_pos = eta_modes.shape[1]
     print(f"Filtro omega positiva: rimossi {n_before_pos - n_after_pos} modi su {n_before_pos}")
 
-    # Tengo solo i modi gravitazionali (quelli con |g|/(|u|+|v|) > Threshold )
-    #n_before_g = eta_modes.shape[1]
-    #grav_ratio = np.linalg.norm(eta_modes, axis=0) / (np.linalg.norm(u_modes, axis=0) + np.linalg.norm(v_modes, axis=0))
-    #grav_threshold = 0.1  #
-    #grav_mask = grav_ratio > grav_threshold
-    #omega   = omega[grav_mask]
-    #eta_modes = eta_modes[:, grav_mask]
-    #u_modes = u_modes[:, grav_mask]
-    #v_modes = v_modes[:, grav_mask]
-    #n_after_g = eta_modes.shape[1]
-    #print(f"Filtro modi gravitazionali: rimossi {n_before_g - n_after_g} modi su {n_before_g}")
-
     # FILTRO sulle bdy cond. di u e v
     n_before_bdy = eta_modes.shape[1]
-
+    # Fisso una soglia a mano o prendo lo 0.001 della velocita' media c=sqrt(Hg)
+    #soglia_uv_bdy = 5e-2
+    soglia_uv_bdy = np.nanmean(np.sqrt(bathy*g))*0.001
     # Analizzo i punti di costa a est ed ovest per u
     coast_u_east_west = []
     for j in range(mask_u.shape[0]):
@@ -669,24 +661,146 @@ def compute_barotropic_modes_K_eta_only(K, mask_t, mask_u, mask_v, k=10, which='
     valid_mask = np.ones(eta_modes.shape[1], dtype=bool)
     # Scorro sui modi 
     for k in range(eta_modes.shape[1]):
-        u_field = u_modes[:, k]
-        v_field = v_modes[:, k]
-        # Se u e' grande lungo coste est o ovest metto False al modo (oppure se u e v sono grandi per no-slip case)
-        if np.any(np.abs(u_field[coast_u_east_west]) > 5e-2) or ( flag_noslip == 1 and np.any(np.abs(v_field[coast_v_east_west]) > 5e-2)):
-            valid_mask[k] = False
-            # Se questo modo e False inutile che controlli anche per v e quindi salto al prossimo k
-            continue
-        # Se v grande lungo coste nord o sud metto False al modo (oppure se u e v sono grandi per no-slip case)
-        if np.any(np.abs(v_field[coast_v_north_south]) > 5e-2) or (flag_noslip == 1 and np.any(np.abs(u_field[coast_u_north_south]) > 5e-2))  :
-            valid_mask[k] = False
-
+      u_field = u_modes[:, k]
+      v_field = v_modes[:, k]
+      # Se u e' grande lungo coste est o ovest metto False al modo (oppure se u e v sono grandi per no-slip case)
+      if np.any(np.abs(u_field[coast_u_east_west]) > soglia_uv_bdy) or ( flag_noslip == 1 and np.any(np.abs(v_field[coast_v_east_west]) > soglia_uv_bdy)):
+        valid_mask[k] = False
+        # Se questo modo e False inutile che controlli anche per v e quindi salto al prossimo k
+        continue
+      # Se v grande lungo coste nord o sud metto False al modo (oppure se u e v sono grandi per no-slip case)
+      if np.any(np.abs(v_field[coast_v_north_south]) > soglia_uv_bdy) or (flag_noslip == 1 and np.any(np.abs(u_field[coast_u_north_south]) > soglia_uv_bdy)):
+        valid_mask[k] = False
+   
     # Applica il filtro
-    omega     = omega[valid_mask]
-    eta_modes = eta_modes[:,valid_mask]
-    u_modes   = u_modes[:,valid_mask]
-    v_modes   = v_modes[:,valid_mask]
-    n_after_bdy = eta_modes.shape[1]
-    print(f"Filtro bdy condition: rimossi {n_before_bdy - n_after_bdy} modi su {n_before_bdy}")
+    if flag_uv_bdy == 1:
+       print ("Applying U/V bdy conditions")
+       omega     = omega[valid_mask]
+       eta_modes = eta_modes[:,valid_mask]
+       u_modes   = u_modes[:,valid_mask]
+       v_modes   = v_modes[:,valid_mask]
+       n_after_bdy = eta_modes.shape[1]
+       print(f"Filtro bdy condition: rimossi {n_before_bdy - n_after_bdy} modi su {n_before_bdy}")
+    else:
+       print(f"Filtro bdy condition NOT applied")
+   
+    # --- FILTRO sulle condizioni al contorno di eta ---
+    n_before_eta_bdy = eta_modes.shape[1]
+    valid_mask_eta = np.ones(n_before_eta_bdy, dtype=bool)
+
+    # La soglia su eta e' calcolata da quella su u e v ma impongo comunqu un max
+    soglia_eta_bdy_max = 1e-6
+
+    # Loop su tutti i modi
+    for k_mode in range(n_before_eta_bdy):
+     eta_field = eta_modes[:, k_mode]
+ 
+     # 1) Punti di bordo sulla griglia u (est/ovest)
+     for k_u in coast_u_east_west:
+         i, j = invmap_u[k_u]
+ 
+         # Estrazione dei punti eta vicini al punto u
+         eta_right = eta_field[mapping_t[(i+1, j)]] if (i+1, j) in mapping_t else 0.0
+         eta_left  = eta_field[mapping_t[(i, j)]]
+ 
+         # Derivata d eta/dx calcolata al punto u
+         deta_dx = (eta_right - eta_left) / e1u[j, i]
+ 
+         # Derivata d eta/dy media sui punti v vicini come in K_12 (central difference)
+         deta_dy = 0.0
+         n_terms = 0
+          
+         # contributo colonna i
+         if (i, j+1) in mapping_t and (i, j-1) in mapping_t:
+             eta_top    = eta_field[mapping_t[(i, j+1)]]
+             eta_bottom = eta_field[mapping_t[(i, j-1)]]
+             deta_dy += (eta_top - eta_bottom) / (2 * e2t[j, i])
+             n_terms += 1
+          
+         # contributo colonna i+1
+         if (i+1, j+1) in mapping_t and (i+1, j-1) in mapping_t:
+             eta_top    = eta_field[mapping_t[(i+1, j+1)]]
+             eta_bottom = eta_field[mapping_t[(i+1, j-1)]]
+             deta_dy += (eta_top - eta_bottom) / (2 * e2t[j, i+1])
+             n_terms += 1
+          
+         # divido per 1/2 se entrambi i contributi esistono perche' prendo la media
+         if n_terms > 0:
+             deta_dy /= n_terms
+
+         # Coriolis su glriglia u
+         f_u = 0.5 * (coriolis[j, i] + coriolis[j, i+1])
+         
+         # Residuo della condizione al bdy su eta da minimizzare
+         residuo_u = np.abs(1j * omega[k_mode] * deta_dx + f_u * deta_dy)
+ 
+         # Calcolo la soglia su eta in base alla soglia imposta su u e v (ma impongo una soglia minima)
+         soglia_eta_bdy=soglia_uv_bdy*(np.abs(omega[k_mode])**2-f_u*f_u)/g
+         soglia_eta_bdy=max(soglia_eta_bdy, soglia_eta_bdy_max)
+         if residuo_u > soglia_eta_bdy:
+             valid_mask_eta[k_mode] = False
+             break  # non serve controllare altri punti di bordo per questo modo
+ 
+     # 2) Punti di bordo sulla griglia v (nord/sud)
+     if valid_mask_eta[k_mode]:  # solo se non è già scartato
+         for k_v in coast_v_north_south:
+             i, j = invmap_v[k_v]
+ 
+             # Estrazione dei punti eta vicini al punto v
+             eta_north = eta_field[mapping_t[(i, j+1)]] if (i, j+1) in mapping_t else 0.0
+             eta_south = eta_field[mapping_t[(i, j)]]
+ 
+             # Derivata d eta/dy al punto v
+             deta_dy = (eta_north - eta_south) / e2v[j, i]
+ 
+             # Derivata d eta/dx media sui punti u vicini come in K_12 (central difference)
+             deta_dx = 0.0
+             n_terms = 0
+             
+             # contributo riga j
+             if (i+1, j) in mapping_t and (i-1, j) in mapping_t:
+                 eta_right = eta_field[mapping_t[(i+1, j)]]
+                 eta_left  = eta_field[mapping_t[(i-1, j)]]
+                 deta_dx += (eta_right - eta_left) / (2 * e1t[j, i])
+                 n_terms += 1
+             
+             # contributo riga j+1
+             if (i+1, j+1) in mapping_t and (i-1, j+1) in mapping_t:
+                 eta_right = eta_field[mapping_t[(i+1, j+1)]]
+                 eta_left  = eta_field[mapping_t[(i-1, j+1)]]
+                 deta_dx += (eta_right - eta_left) / (2 * e1t[j+1, i])
+                 n_terms += 1
+             
+             # divido per numero di contributi se >1 (media)
+             if n_terms > 0:
+                 deta_dx /= n_terms
+             
+             # Coriolis su griglia v
+             f_v = 0.5 * (coriolis[j, i] + coriolis[j+1, i])
+             
+             # Residuo della condizione al bdy su eta da minimizzare
+             residuo_v = np.abs(1j * omega[k_mode] * deta_dy - f_v * deta_dx)
+
+             # Calcolo la soglia su eta in base alla soglia imposta su u e v
+             soglia_eta_bdy=soglia_uv_bdy*(np.abs(omega[k_mode])**2-f_v*f_v)/g
+             soglia_eta_bdy=max(soglia_eta_bdy, soglia_eta_bdy_max)
+
+             if residuo_v > soglia_eta_bdy:
+                 valid_mask_eta[k_mode] = False
+                 break  # non serve controllare altri punti di bordo per questo modo
+ 
+    # Applica il filtro
+    if flag_eta_bdy == 1:
+       print ("Applying eta bdy conditions")
+       omega     = omega[valid_mask_eta]
+       period    = 2 * np.pi / omega / 3600
+       eta_modes = eta_modes[:, valid_mask_eta]
+ 
+       n_after_eta_bdy = eta_modes.shape[1]
+       print(f"Filtro bdy condition su eta: rimossi {n_before_eta_bdy - n_after_eta_bdy} modi su {n_before_eta_bdy}")
+
+    else:
+       print(f"Filtro bdy condition su eta NOT applied")
 
     # Tengo solo la parte reale oppure calcolo il modulo sqrt(Re*2+Im*2)
     omega = np.real(omega)
@@ -696,8 +810,7 @@ def compute_barotropic_modes_K_eta_only(K, mask_t, mask_u, mask_v, k=10, which='
     period = 2 * np.pi / omega / 3600
     print("all periods:", period)
 
-    # --- FILTRO sugli autovettori ---
-    # Anche per l'ampiezza tengo solo le parti reali oppure calcolo il modulo sqrt(Re*2+Im*2)
+    # Per l'ampiezza prendo solo le parti reali oppure calcolo il modulo sqrt(Re*2+Im*2)
     #eta_modes = np.real(eta_modes)
     eta_modes =  np.sqrt(np.real(eta_modes)**2 + np.imag(eta_modes)**2)
 
@@ -847,6 +960,7 @@ def mask_atlantic(mask):
 mask_t = mask_atlantic(mask_t)
 mask_u = mask_atlantic(mask_u)
 mask_v = mask_atlantic(mask_v)
+bathy  = mask_atlantic(bathy)
 
 # Plot input fields
 print ('Plotting input fields..')
@@ -868,7 +982,7 @@ if flag_compute_modes != 0 :
    if flag_f == 0:
       omega, period, modes = compute_barotropic_modes(A, k=mode_num, which=eig_order,reference_period=reference_period)
    else:
-      omega, period, eta_modes = compute_barotropic_modes_K_eta_only(K, mask_t, mask_u, mask_v, k=mode_num, which=eig_order,reference_period=reference_period)
+      omega, period, eta_modes = compute_barotropic_modes_K_eta_only(K, mask_t, mask_u, mask_v, dxu, dyv, dxt, dyt, bathy, k=mode_num, which=eig_order,reference_period=reference_period)
       modes=eta_modes
    print ('Done!')
 
