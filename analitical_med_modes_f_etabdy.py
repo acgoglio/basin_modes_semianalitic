@@ -15,9 +15,7 @@ mpl.use('Agg')
 #####################
 # INPUTS
 # Work directory
-work_dir           = "/work/cmcc/ag15419/basin_modes_new/basin_modes_sa_mod4_ETA//"
-#"/work/cmcc/ag15419/basin_modes_new/basin_modes_sa_mod2_onlyetabdy/"
-
+work_dir           = "/work/cmcc/ag15419/basin_modes_new/basin_modes_sa_mod5/"
 # Num of modes to be analyzed
 mode_num           = 120
 # The code starts to look for modes around the following period [h]
@@ -28,9 +26,6 @@ eig_order          = 'LM'
 Tmin               = 2
 # Max val of the modes periods [h]
 Tmax               = 40
-# Consider only the modes whose amplitude is higher than Perc_Amp % of the highest amplitude value in a num of grid points higher than Counts_min 
-#Perc_Amp           = 0.001
-#Counts_min         = 1
 # Amplitude palette limits [-Plot_max,Plot_max] [%]
 Plot_max           = 100
 # Filter out modes with low amplitude, e.g. 0.10 means that all the modes with amplitude<10% of the total amplitude are rm (to avoid the filtering set amplitude_threshold_ratio = 0)
@@ -49,18 +44,12 @@ flag_compute_modes = 1
 
 # If you wan to apply one or both the boundary conditions on velocities and/or on eta
 # To set U and V normal to the bdy = 0 => flag_uv_bdy=1 
-flag_uv_bdy = 0
+flag_uv_bdy = 1
 # To apply the bdy conditions on eta => flag_eta_bdy=1
 flag_eta_bdy = 0
 
-# If you want to apply the no-slip conditions ( e.g. current // to the coast = 0 ) set flag_no-slip = 1
-flag_noslip = 0
-
 # To plot only the Adriatic Sea area set flag_only_adriatic = 1
 flag_only_adriatic = 0
-
-# To set f term (1=rot+grav modes, 0=only gravitational contribution, 2=f cost+grav modes)
-flag_f             = 1
 
 # To use the original GEBCO bathy instead of the MedFS bathy with the 4000m cut (interpolation on the MedFS grid is required)
 flag_gebco_bathy   = 0
@@ -130,13 +119,8 @@ def prepare_fields(meshmask_path, bathy_path):
     # Coriolis f
     omega = 7.292115e-5  # rad/s
     #omega = 0.0 # TMP for debug!
-    if flag_f != 2:
-       coriolis = 2 * omega * np.sin(np.deg2rad(lat)) 
-       print ('Coriolis:',coriolis)
-    elif flag_f == 2:
-       lat_fix=lat*0+37.75
-       coriolis = 2 * omega * np.sin(np.deg2rad(lat_fix)) 
-       print ('Constant Coriolis:',coriolis)
+    coriolis = 2 * omega * np.sin(np.deg2rad(lat)) 
+    print ('Coriolis:',coriolis)
 
     # Grid (dx, dy)
     dxt = ds_mask['e1t'].isel(t=0).values  # m
@@ -181,79 +165,6 @@ def plot_input_fields(mask, bathy, coriolis, dx, dy, filename="input_fields.png"
     plt.tight_layout()
     plt.savefig(filename, dpi=dpi)
     plt.close()
-
-# Case without rotation
-def build_operator_A(mask, bathy, coriolis, e1u, e2v, e1t, e2t, g=9.81):
-    ny, nx = mask.shape
-    mapping = {}
-    invmap = {}
-    idx = 0
-
-    for j in range(ny):
-        for i in range(nx):
-            if mask[j, i]:
-                mapping[(i, j)] = idx
-                invmap[idx] = (i, j)
-                idx += 1
-
-    N = idx
-    rows, cols, data = [], [], []
-
-    for k in range(N):
-        i, j = invmap[k]
-        H = bathy[j, i]
-        f = coriolis[j, i]
-        diag = 0
-
-        # Direzione x (U-points)
-        for di in [-1, 1]:
-            ni = i + di
-            # Se e' dentro il dominio e se e' punto mare
-            if 0 <= ni < nx and mask[j, ni]:
-                # Calcolo bathy media tra i due punti consecutivi
-                Hij = 0.5 * (bathy[j, i] + bathy[j, ni])
-                # calcolo la lunghezza della cella in direzione zonale
-                e1u_ij = e1u[j, i] if di > 0 else e1u[j, ni]
-                # Calcolo il coeff
-                coeff = g * Hij / (e1u_ij * e1t[j, i])
-                n_idx = mapping[(ni, j)]
-
-                # La righa dell'operatore corrisponde al punto corrente (k)
-                rows.append(k)
-                # Il valore nella colonna dell'operatore corrisponde invece al punto con cui interagisce il punto corrente 
-                cols.append(n_idx)
-                # Scrivo i Valori fuori diagonale
-                data.append(coeff)    # Scrivo il termine non rot fuori diag
-                # Aggiorno i valori della diagonale (sottraendo dal termine rotazionale)
-                #print ('diag prima x',diag)
-                diag = diag - coeff         # termine non rot sulla diagonale
-                #print ('diag dopo x',diag)
-
-        # Direzione y (V-points) - stessa cosa
-        for dj in [-1, 1]:
-            nj = j + dj
-            if 0 <= nj < ny and mask[nj, i]:
-                Hij = 0.5 * (bathy[j, i] + bathy[nj, i])
-                e2v_ij = e2v[j, i] if dj > 0 else e2v[nj, i]
-                coeff = g * Hij / (e2v_ij * e2t[j, i])
-                n_idx = mapping[(i, nj)]
-
-                rows.append(k)
-                cols.append(n_idx)
-                data.append(coeff)    # Scrivo il termine non rot fuori diag
-                # Aggiorno i valori della diagonale (sottraendo dal termine rotazionale)
-                #print ('diag prima y',diag)
-                diag = diag - coeff        # termine non rot sulla diagonale
-                #print ('diag dopo y',diag)
-
-        # Scrivo i valori calcolati per la diagonale
-        rows.append(k)
-        cols.append(k)
-        data.append(diag)
-
-    A = sp.csr_matrix((data, (rows, cols)), shape=(N, N))
-    #print("A symmetric?", (A - A.T).nnz == 0)
-    return A, mapping, invmap
 
 # Rotation case (K X = lambda X,  X = (u,v,eta) )
 def build_operator_K(mask_t, mask_u, mask_v, bathy, coriolis, e1u, e2v, e1t, e2t, g=9.81):
@@ -484,85 +395,7 @@ def build_operator_K(mask_t, mask_u, mask_v, bathy, coriolis, e1u, e2v, e1t, e2t
     N = N_u + N_v + N_t
     K = sp.csr_matrix((data_all, (rows_all, cols_all)), shape=(N, N))
 
-#    # Diagnostica K
-#    # --- Debug: statistiche e primi elementi di tutti i blocchi ---
-#    blocks = {
-#        "K_12": (rows_k12, cols_k12, data_k12),
-#        "K_21": (rows_k21, cols_k21, data_k21),
-#        "K_13": (rows_k13, cols_k13, data_k13),
-#        "K_23": (rows_k23, cols_k23, data_k23),
-#        "K_31": (rows_k31, cols_k31, data_k31),
-#        "K_32": (rows_k32, cols_k32, data_k32),
-#    }
-#    
-#    for name, (rows, cols, data) in blocks.items():
-#        data = np.array(data)
-#        print(f"\n--- {name} ---")
-#        print(f"Numero elementi: {len(data)}")
-#        print(f"Min: {data.min():.4e}, Max: {data.max():.4e}, Mean: {data.mean():.4e}")
-#        print(f"Primi 10 elementi (riga,colonna,valore):")
-#        for idx in range(min(10, len(data))):
-#            print(f"{rows[idx]},{cols[idx]},{data[idx]:.4e}")
-#    
-#    # Controllo generale della matrice completa
-#    K_data = K.data
-#    print(f"\nMatrice completa K: min {K_data.min():.4e}, max {K_data.max():.4e}, mean {K_data.mean():.4e}, nnz {K.nnz}")
-#
-#    # --- Diagnostic K ---
-#    print("\n--- K diagnostics ---")
-#    print(f"Shape of K: {K.shape}, nnz: {K.nnz}")
-#    print(f"Min / Max / Mean of K: {K.data.min():.3e} / {K.data.max():.3e} / {K.data.mean():.3e}")
-#    
-#    # Controllo righe più “dense”
-#    row_nnz = np.diff(K.indptr)
-#    print(f"Righe con più elementi non zero: max {row_nnz.max()}, min {row_nnz.min()}, mean {row_nnz.mean():.1f}")
-#    
-#    # Controllo valori assoluti per righe specifiche (es. primo blocco u)
-#    first_rows = row_nnz[:10]
-#    print("Primi 10 valori nnz per righe:", first_rows)
-#    
-#    # Stampa qualche elemento u-v per verifica
-#    print("Primi 10 elementi K (riga, colonna, valore):")
-#    rows, cols = K.nonzero()
-#    for r, c in zip(rows[:10], cols[:10]):
-#        print(r, c, K[r, c])
-#
-#    asym = K - K.T
-#    print("Norma parte asimmetrica:", sp.linalg.norm(asym))
-#    print("Norma K:", sp.linalg.norm(K))
-#    print("Rapporto:", sp.linalg.norm(asym)/sp.linalg.norm(K))
-#    # Fine diagnostica K
-
     return K, mapping_u, mapping_v, mapping_t, invmap_t, invmap_u, invmap_v
-
-
-# Case without rotation 
-def compute_barotropic_modes(A, k=10, which='LM', reference_period=24):
-    # Compute sigma (target eigenvalue)
-    Tref_sec = reference_period * 3600
-    omega_ref = 2 * np.pi / Tref_sec
-    sigma = - omega_ref**2  
-
-    # Solve perche' l'eq. e' A eta = lambda eta
-    eigvals, eigvecs = eigsh(A, k=k, sigma=sigma, which=which, mode='normal')
-    #eigvals, eigvecs =eigsh(A, k=k, which=which)
-    #print("Eigenvalues:", eigvals)
-
-    # Consider only physical eigenvalues
-    valid = eigvals < 0
-    eigvals = eigvals[valid]
-    eigvecs = eigvecs[:, valid]
-    #print("Eigenvalues with physical relevance:", eigvals)
-
-    # Frequenze omega = sqrt(lambda)
-    omega = np.sqrt(-eigvals)
-    #omega = np.sqrt(np.abs(eigvals))
-
-    # Periodi in ore
-    period = 2 * np.pi / omega / 3600
-    print('Selected periods:', period)
-
-    return omega, period, eigvecs
 
 
 # Rot case
@@ -603,8 +436,7 @@ def compute_barotropic_modes_K_eta_only(K, mask_t, mask_u, mask_v, e1u, e2v,  e1
 
     # FILTRO sulle bdy cond. di u e v
     n_before_bdy = eta_modes.shape[1]
-    # Fisso una soglia a mano o prendo lo 0.001 della velocita' media c=sqrt(Hg)
-    #soglia_uv_bdy = 5e-2
+    # Fisso una soglia a 0.001 della velocita' media c=sqrt(Hg)
     soglia_uv_bdy = np.nanmean(np.sqrt(bathy*g))*0.001
 
     # Analizzo i punti di costa a est ed ovest per u
@@ -625,48 +457,19 @@ def compute_barotropic_modes_K_eta_only(K, mask_t, mask_u, mask_v, e1u, e2v,  e1
                # Creo una lista dei punti lungo costa con costa a nord o a sud
                coast_v_north_south.append(mapping_v[(i,j)])
 
-    # Nel caso voglia imporre anche la condizione di no-slip (velocita' parallela alla costa = 0 )
-    # Devo analizzare anche i punti di costa a est ed ovest per u 
-    # e i punti di costa a nord e sud per u
-    if flag_noslip == 1:
-       # Analizzo i punti di costa a est ed ovest per v
-       coast_v_east_west = []
-       for j in range(mask_v.shape[0]):
-           for i in range(mask_v.shape[1]):
-               # Se il punto e' mare
-               if mask_v[j,i]:
-                   # Se il punto di mare ha a est o ad ovest terra (o se e' l'ultima cella del dominio)
-                   if (i == 0 or i == mask_v.shape[1]-1 or
-                       (i>0 and not mask_v[j,i-1]) or (i<mask_v.shape[1]-1 and not mask_v[j,i+1])):
-                       # Creo una lista dei punti lungo costa con costa a est o ad ovest:
-                       coast_v_east_west.append(mapping_v[(i,j)])
-
-       # Analizzo i punti di costa a nord e sud per u
-       coast_u_north_south = []
-       for j in range(mask_u.shape[0]):
-           for i in range(mask_u.shape[1]):
-               # Se il punto e' mare
-               if mask_u[j,i]:
-                   # Se il punto di mare ha a nord o a sud terra (o se e' l'ultima cella del dominio)
-                   if (j == 0 or j == mask_u.shape[0]-1 or
-                       (j>0 and not mask_u[j-1,i]) or (j<mask_u.shape[0]-1 and not mask_u[j+1,i])):
-                       # Creo una lista dei punti lungo costa con costa a nord o a sud
-                       coast_u_north_south.append(mapping_u[(i,j)])
-
-
     # Creo una maschera dei modi da tenere (iniziallizandola a tutti true)
     valid_mask = np.ones(eta_modes.shape[1], dtype=bool)
     # Scorro sui modi 
     for k in range(eta_modes.shape[1]):
       u_field = u_modes[:, k]
       v_field = v_modes[:, k]
-      # Se u e' grande lungo coste est o ovest metto False al modo (oppure se u e v sono grandi per no-slip case)
-      if np.any(np.abs(u_field[coast_u_east_west]) > soglia_uv_bdy) or ( flag_noslip == 1 and np.any(np.abs(v_field[coast_v_east_west]) > soglia_uv_bdy)):
+      # Se u e' grande lungo coste est o ovest metto False al modo 
+      if np.any(np.abs(u_field[coast_u_east_west]) > soglia_uv_bdy):
         valid_mask[k] = False
         # Se questo modo e False inutile che controlli anche per v e quindi salto al prossimo k
         continue
       # Se v grande lungo coste nord o sud metto False al modo (oppure se u e v sono grandi per no-slip case)
-      if np.any(np.abs(v_field[coast_v_north_south]) > soglia_uv_bdy) or (flag_noslip == 1 and np.any(np.abs(u_field[coast_u_north_south]) > soglia_uv_bdy)):
+      if np.any(np.abs(v_field[coast_v_north_south]) > soglia_uv_bdy):
         valid_mask[k] = False
    
     # Applica il filtro
@@ -799,16 +602,14 @@ def compute_barotropic_modes_K_eta_only(K, mask_t, mask_u, mask_v, e1u, e2v,  e1
     else:
        print(f"Filtro bdy condition su eta NOT applied")
 
-    # Tengo solo la parte reale oppure calcolo il modulo sqrt(Re*2+Im*2)
+    # Tengo solo la parte reale
     omega = np.real(omega)
-    #omega = np.sqrt(np.real(omega)**2 + np.imag(omega)**2)
 
     # Periodi in ore
     period = 2 * np.pi / omega / 3600
     print("all periods:", period)
 
-    # Per l'ampiezza prendo solo le parti reali oppure calcolo il modulo sqrt(Re*2+Im*2)
-    #eta_modes = np.real(eta_modes)
+    # Per l'ampiezza calcolo il modulo sqrt(Re*2+Im*2)
     eta_modes =  np.sqrt(np.real(eta_modes)**2 + np.imag(eta_modes)**2)
 
     return omega, period, eta_modes
@@ -968,19 +769,13 @@ print ('Done!')
 
 if flag_compute_modes != 0 :
 
-   print ('Compute A or K operator')
-   if flag_f == 0:
-      A, mapping, invmap_t = build_operator_A(mask_t, bathy, coriolis, dxu, dyv, dxt, dyt)
-   else:
-      K, mapping_u, mapping_v, mapping_t, invmap_t, invmap_u, invmap_v  = build_operator_K(mask_t, mask_u, mask_v, bathy, coriolis, dxu, dyv, dxt, dyt)
+   print ('Compute K operator')
+   K, mapping_u, mapping_v, mapping_t, invmap_t, invmap_u, invmap_v  = build_operator_K(mask_t, mask_u, mask_v, bathy, coriolis, dxu, dyv, dxt, dyt)
    print ('Done!')
 
    print ('Compute the modes')
-   if flag_f == 0:
-      omega, period, modes = compute_barotropic_modes(A, k=mode_num, which=eig_order,reference_period=reference_period)
-   else:
-      omega, period, eta_modes = compute_barotropic_modes_K_eta_only(K, mask_t, mask_u, mask_v, dxu, dyv, dxt, dyt, bathy, k=mode_num, which=eig_order,reference_period=reference_period)
-      modes=eta_modes
+   omega, period, eta_modes = compute_barotropic_modes_K_eta_only(K, mask_t, mask_u, mask_v, dxu, dyv, dxt, dyt, bathy, k=mode_num, which=eig_order,reference_period=reference_period)
+   modes=eta_modes
    print ('Done!')
 
    print ('Select modes with periods in the following range [h]:',Tmin,Tmax)
@@ -1013,13 +808,9 @@ sorted_indices = np.argsort(-period)
 renum = 0  
 for m in sorted_indices:
     max_amp = np.nanmax(modes_2D[m])
-    #if max_amp > Th_Amp:
-    #    counts = np.sum(modes_2D[m] > Th_Amp)
-    #    if counts > Counts_min:
     this_period = period[m]
     print ('Mode:',renum,f' Period: {this_period:.2f} h') 
             
-    #title = f"Barotropic mode {renum} - Period {this_period:.2f} h"
     title = f"Mode with Period: {this_period:.2f} h"
     if flag_only_adriatic == 1:
        filename = f"{work_dir}/mode_{renum:02d}_{mode_num}_{this_period:.2f}h_AdrSea.png"
