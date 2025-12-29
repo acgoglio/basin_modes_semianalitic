@@ -611,8 +611,10 @@ def compute_barotropic_modes_K_eta_only(K, mask_t, mask_u, mask_v, e1u, e2v,  e1
     coast_u_east_west = []
     for j in range(mask_u.shape[0]):
         for i in range(mask_u.shape[1]):
-            # Se il punto u ha a est terra e ad ovest mare o viceversa
-            if (not mask_t[j,i] and mask_t[j,i+1]) or (mask_t[j,i] and not mask_t[j,i+1]):
+          # Se e' un punto mare
+          #if mask_u[j,i]:
+            # Se il punto u ha a est terra e ad ovest mare o viceversa o se e' il primo o l'ultimo del dominio
+            if ( i>0 and i<mask_u.shape[1]-1 and not mask_t[j,i] and mask_t[j,i+1]) or ( i>0 and i<mask_u.shape[1]-1 and mask_t[j,i] and not mask_t[j,i+1]) or i == 0 or i == mask_u.shape[1]-1:
                # Creo una lista dei punti lungo costa con costa a est o ad ovest:
                coast_u_east_west.append(mapping_u[(i,j)])
 
@@ -620,8 +622,10 @@ def compute_barotropic_modes_K_eta_only(K, mask_t, mask_u, mask_v, e1u, e2v,  e1
     coast_v_north_south = []
     for j in range(mask_v.shape[0]):
         for i in range(mask_v.shape[1]):
+          # Se e' un punto mare
+          if mask_v[j,i]:
             # Se il punto v ha a sud terra e a nord mare o viceversa
-            if (not mask_t[j,i] and mask_t[j+1,i]) or (mask_t[j,i] and not mask_t[j+1,i]):
+            if ( j>0 and j<mask_v.shape[0]-1 and not mask_t[j,i] and mask_t[j+1,i]) or ( j>0 and j<mask_v.shape[0]-1 and mask_t[j,i] and not mask_t[j+1,i]) or j == 0 or j == mask_v.shape[0]-1:
                # Creo una lista dei punti lungo costa con costa a nord o a sud
                coast_v_north_south.append(mapping_v[(i,j)])
 

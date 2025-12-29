@@ -15,7 +15,7 @@ mpl.use('Agg')
 #####################
 # INPUTS
 # Work directory
-work_dir           = "/work/cmcc/ag15419/basin_modes_new/basin_modes_sa_mod5/"
+work_dir           = "/work/cmcc/ag15419/basin_modes_new/basin_modes_sa_mod6/"
 # Num of modes to be analyzed
 mode_num           = 120
 # The code starts to look for modes around the following period [h]
@@ -42,11 +42,8 @@ outfile_R          = work_dir+'med_modes_'+str(mode_num)+'.nc'
 # If you want to compute the mode flag_compute_modes = 1 
 flag_compute_modes = 1
 
-# If you wan to apply one or both the boundary conditions on velocities and/or on eta
-# To set U and V normal to the bdy = 0 => flag_uv_bdy=1 
-flag_uv_bdy = 1
 # To apply the bdy conditions on eta => flag_eta_bdy=1
-flag_eta_bdy = 0
+flag_eta_bdy = 1
 
 # To plot only the Adriatic Sea area set flag_only_adriatic = 1
 flag_only_adriatic = 0
@@ -67,10 +64,15 @@ def prepare_fields(meshmask_path, bathy_path):
     mask_t = ds_mask['tmask'].isel(t=0, z=0).values.astype(bool)
     mask_u = ds_mask['umask'].isel(t=0, z=0).values.astype(bool)
     mask_v = ds_mask['vmask'].isel(t=0, z=0).values.astype(bool)
+    mask_f = (ds_mask['fmask'].isel(t=0, z=0).values > 0)
 
     mask=mask_t
     lat_nemo = ds_mask['nav_lat'].isel().values
     lon_nemo = ds_mask['nav_lon'].isel().values
+
+    # Calcolo lat/lon F-grid come media dei 4 T-point adiacenti
+    lat_f = 0.25 * (lat_nemo[:-1, :-1] + lat_nemo[1:, :-1] + lat_nemo[:-1, 1:] + lat_nemo[1:, 1:])
+    lon_f = 0.25 * (lon_nemo[:-1, :-1] + lon_nemo[1:, :-1] + lon_nemo[:-1, 1:] + lon_nemo[1:, 1:])
 
     # Bathymetry
     if flag_gebco_bathy == 0:
@@ -115,11 +117,10 @@ def prepare_fields(meshmask_path, bathy_path):
         bathy = bath_new_masked
 
     # Lat
-    lat = ds_mask['nav_lat'].values
-    # Coriolis f
+    # Coriolis f su griglia F
     omega = 7.292115e-5  # rad/s
     #omega = 0.0 # TMP for debug!
-    coriolis = 2 * omega * np.sin(np.deg2rad(lat)) 
+    coriolis = 2 * omega * np.sin(np.deg2rad(lat_f)) 
     print ('Coriolis:',coriolis)
 
     # Grid (dx, dy)
@@ -201,17 +202,30 @@ def build_operator_K(mask_t, mask_u, mask_v, bathy, coriolis, e1u, e2v, e1t, e2t
     invmap_u = {}
     idx_u = 0
 
+    mapping_not_u = {}
+    invmap_not_u = {}
+    idx_not_u = 0
+
     for j in range(ny_u):
         for i in range(nx_u):
             if mask_u[j, i]:
                 mapping_u[(i,j)] = idx_u
                 invmap_u[idx_u] = (i,j)
                 idx_u += 1
+            else: 
+                mapping_not_u[(i,j)] = idx_not_u
+                invmap_not_u[idx_u] = (i,j)
+                idx_not_u += 1
+
     N_u = idx_u  # numero di punti mare griglia u
 
     mapping_v = {}
     invmap_v = {}
     idx_v = 0
+
+    mapping_not_v = {}
+    invmap_not_v = {}
+    idx_not_v = 0
 
     for j in range(ny_v):
         for i in range(nx_v):
@@ -219,6 +233,10 @@ def build_operator_K(mask_t, mask_u, mask_v, bathy, coriolis, e1u, e2v, e1t, e2t
                 mapping_v[(i,j)] = idx_v
                 invmap_v[idx_v] = (i,j)
                 idx_v += 1
+            else:
+                mapping_not_v[(i,j)] = idx_not_v
+                invmap_not_v[idx_v] = (i,j)
+                idx_not_v += 1
     N_v = idx_v  # numero di punti mare griglia v
 
     # offset globali per u, v, eta
@@ -237,7 +255,7 @@ def build_operator_K(mask_t, mask_u, mask_v, bathy, coriolis, e1u, e2v, e1t, e2t
             continue
     
         # f interpolata al punto u
-        f_u = 0.5 * (coriolis[j, i] + coriolis[j, i+1])
+        f_u = 0.5 * (coriolis[j, i] + coriolis[j-1, i])
     
         # v vicini (4 punti) attorno a u
         v_indices = [
@@ -270,7 +288,7 @@ def build_operator_K(mask_t, mask_u, mask_v, bathy, coriolis, e1u, e2v, e1t, e2t
             continue
     
         # f interpolata al punto v
-        f_v = 0.5 * (coriolis[j, i] + coriolis[j+1, i])
+        f_v = 0.5 * (coriolis[j, i] + coriolis[j, i-1])
     
         # u vicini (4 punti) attorno a v
         u_indices = [
@@ -395,7 +413,7 @@ def build_operator_K(mask_t, mask_u, mask_v, bathy, coriolis, e1u, e2v, e1t, e2t
     N = N_u + N_v + N_t
     K = sp.csr_matrix((data_all, (rows_all, cols_all)), shape=(N, N))
 
-    return K, mapping_u, mapping_v, mapping_t, invmap_t, invmap_u, invmap_v
+    return K, mapping_u, mapping_v, mapping_t, invmap_t, invmap_u, invmap_v, mapping_not_u, mapping_not_v, invmap_not_u, invmap_not_v
 
 
 # Rot case
@@ -434,61 +452,50 @@ def compute_barotropic_modes_K_eta_only(K, mask_t, mask_u, mask_v, e1u, e2v,  e1
     n_after_pos = eta_modes.shape[1]
     print(f"Filtro omega positiva: rimossi {n_before_pos - n_after_pos} modi su {n_before_pos}")
 
-    # FILTRO sulle bdy cond. di u e v
+    # BDY CONDITIONS
     n_before_bdy = eta_modes.shape[1]
-    # Fisso una soglia a 0.001 della velocita' media c=sqrt(Hg)
-    soglia_uv_bdy = np.nanmean(np.sqrt(bathy*g))*0.001
 
-    # Analizzo i punti di costa a est ed ovest per u
+    # Cerco i punti di costa a est ed ovest per u
     coast_u_east_west = []
+    coast_u_east_west_idx = []
     for j in range(mask_u.shape[0]):
-        for i in range(mask_u.shape[1]):
-            # Se il punto u ha a est terra e ad ovest mare o viceversa
-            if (not mask_t[j,i] and mask_t[j,i+1]) or (mask_t[j,i] and not mask_t[j,i+1]):
-               # Creo una lista dei punti lungo costa con costa a est o ad ovest:
-               coast_u_east_west.append(mapping_u[(i,j)])
+        for i in range(mask_u.shape[1]-1):
+          # Se e' un punto terra 
+          if not mask_u[j,i]:
+             t_west = mask_t[j, i]
+             t_east = mask_t[j, i+1]
+             # se la costa e' a est
+             if t_west:
+                coast_u_east_west.append(mapping_t[(i,j)])
+                coast_u_east_west_idx.append((j,i))
+             # se la costa e' a ovest
+             elif t_east:
+                coast_u_east_west.append(mapping_t[(i+1,j)]) 
+                coast_u_east_west_idx.append((j,i))
 
-    # Analizzo i punti di costa a nord e sud per v
+    # Cerco i punti di costa a nord e sud per v
     coast_v_north_south = []
-    for j in range(mask_v.shape[0]):
+    coast_v_north_south_idx = []
+    for j in range(mask_v.shape[0]-1):
         for i in range(mask_v.shape[1]):
-            # Se il punto v ha a sud terra e a nord mare o viceversa
-            if (not mask_t[j,i] and mask_t[j+1,i]) or (mask_t[j,i] and not mask_t[j+1,i]):
-               # Creo una lista dei punti lungo costa con costa a nord o a sud
-               coast_v_north_south.append(mapping_v[(i,j)])
+          # Se v e' un punto terra
+          if not mask_v[j,i]:
+            t_south = mask_t[j, i]
+            t_north = mask_t[j+1, i]
+            # se la costa e' a nord
+            if t_south:
+               coast_v_north_south.append(mapping_t[(i,j)])
+               coast_v_north_south_idx.append((j,i))
+            # se la costa e' a sud
+            if t_north:
+               coast_v_north_south.append(mapping_t[(i,j+1)])
+               coast_v_north_south_idx.append((j,i))
 
-    # Creo una maschera dei modi da tenere (iniziallizandola a tutti true)
-    valid_mask = np.ones(eta_modes.shape[1], dtype=bool)
-    # Scorro sui modi 
-    for k in range(eta_modes.shape[1]):
-      u_field = u_modes[:, k]
-      v_field = v_modes[:, k]
-      # Se u e' grande lungo coste est o ovest metto False al modo 
-      if np.any(np.abs(u_field[coast_u_east_west]) > soglia_uv_bdy):
-        valid_mask[k] = False
-        # Se questo modo e False inutile che controlli anche per v e quindi salto al prossimo k
-        continue
-      # Se v grande lungo coste nord o sud metto False al modo (oppure se u e v sono grandi per no-slip case)
-      if np.any(np.abs(v_field[coast_v_north_south]) > soglia_uv_bdy):
-        valid_mask[k] = False
-   
-    # Applica il filtro
-    if flag_uv_bdy == 1:
-       print ("Applying U/V bdy conditions")
-       omega     = omega[valid_mask]
-       eta_modes = eta_modes[:,valid_mask]
-       u_modes   = u_modes[:,valid_mask]
-       v_modes   = v_modes[:,valid_mask]
-       n_after_bdy = eta_modes.shape[1]
-       print(f"Filtro bdy condition: rimossi {n_before_bdy - n_after_bdy} modi su {n_before_bdy}")
-    else:
-       print(f"Filtro bdy condition NOT applied")
-   
-    # --- FILTRO sulle condizioni al contorno di eta ---
+    # Condizioni  al contorno su ETA lungo la costa
     n_before_eta_bdy = eta_modes.shape[1]
     valid_mask_eta = np.ones(n_before_eta_bdy, dtype=bool)
 
-    # La soglia su eta e' calcolata da quella su u e v ma impongo comunque un max
+    # La soglia su residual_eta
     soglia_eta_bdy_max = 1e-6
 
     # Loop su tutti i modi
@@ -496,96 +503,78 @@ def compute_barotropic_modes_K_eta_only(K, mask_t, mask_u, mask_v, e1u, e2v,  e1
      eta_field = eta_modes[:, k_mode]
  
      # 1) Punti di bordo sulla griglia u (est/ovest)
-     for k_u in coast_u_east_west:
-         i, j = invmap_u[k_u]
+     for j_coast, i_coast in coast_u_east_west_idx:
  
          # Estrazione dei punti eta vicini al punto u
-         eta_right = eta_field[mapping_t[(i+1, j)]] if (i+1, j) in mapping_t else 0.0
-         eta_left  = eta_field[mapping_t[(i, j)]]
+         eta_right = eta_field[mapping_t[(i_coast+1, j_coast)]] if (i_coast+1, j_coast) in mapping_t else 0.0
+         eta_left  = eta_field[mapping_t[(i_coast, j_coast)]] if (i_coast, j_coast) in mapping_t else 0.0
  
          # Derivata d eta/dx calcolata al punto u
-         deta_dx = (eta_right - eta_left) / e1u[j, i]
+         deta_dx = (eta_right - eta_left) / e1u[j_coast, i_coast]
  
-         # Derivata d eta/dy media sui punti v vicini come in K_12 (central difference)
+         # Derivata d eta/dy media sui punti v vicini (central difference)
          deta_dy = 0.0
-         n_terms = 0
           
          # contributo colonna i
-         if (i, j+1) in mapping_t and (i, j-1) in mapping_t:
-             eta_top    = eta_field[mapping_t[(i, j+1)]]
-             eta_bottom = eta_field[mapping_t[(i, j-1)]]
-             deta_dy += (eta_top - eta_bottom) / (2 * e2t[j, i])
-             n_terms += 1
+         eta_top    = eta_field[mapping_t[(i_coast, j_coast+1)]] if (i_coast, j_coast+1) in mapping_t else 0.0
+         eta_bottom = eta_field[mapping_t[(i_coast, j_coast-1)]] if (i_coast, j_coast-1) in mapping_t else 0.0
+         deta_dy += (eta_top - eta_bottom) / (2 * e2t[j_coast, i_coast])
           
          # contributo colonna i+1
-         if (i+1, j+1) in mapping_t and (i+1, j-1) in mapping_t:
-             eta_top    = eta_field[mapping_t[(i+1, j+1)]]
-             eta_bottom = eta_field[mapping_t[(i+1, j-1)]]
-             deta_dy += (eta_top - eta_bottom) / (2 * e2t[j, i+1])
-             n_terms += 1
+         eta_top    = eta_field[mapping_t[(i_coast+1, j_coast+1)]] if (i_coast+1, j_coast+1) in mapping_t else 0.0
+         eta_bottom = eta_field[mapping_t[(i_coast+1, j_coast-1)]] if (i_coast+1, j_coast-1) in mapping_t else 0.0
+         deta_dy += (eta_top - eta_bottom) / (2 * e2t[j_coast, i_coast+1])
           
-         # divido per 1/2 se entrambi i contributi esistono perche' prendo la media
-         if n_terms > 0:
-             deta_dy /= n_terms
+         # divido per 1/2 perche' prendo la media tra est ed ovest
+         deta_dy /= 2.0
 
          # Coriolis su glriglia u
-         f_u = 0.5 * (coriolis[j, i] + coriolis[j, i+1])
+         f_u = 0.5 * (coriolis[j_coast, i_coast] + coriolis[j_coast-1, i_coast])
          
          # Residuo della condizione al bdy su eta da minimizzare
          residuo_u = np.abs(1j * omega[k_mode] * deta_dx + f_u * deta_dy)
- 
-         # Calcolo la soglia su eta in base alla soglia imposta su u e v (ma impongo una soglia minima)
-         soglia_eta_bdy=soglia_uv_bdy*(np.abs(omega[k_mode])**2-f_u*f_u)/g
-         soglia_eta_bdy=max(soglia_eta_bdy, soglia_eta_bdy_max)
-         if residuo_u > soglia_eta_bdy:
+         print ('Prova residuo_u',residuo_u)
+
+         # Calcolo la soglia su eta in base alla soglia massima
+         if residuo_u > soglia_eta_bdy_max:
              valid_mask_eta[k_mode] = False
              break  # non serve controllare altri punti di bordo per questo modo
  
      # 2) Punti di bordo sulla griglia v (nord/sud)
      if valid_mask_eta[k_mode]:  # solo se non è già scartato
-         for k_v in coast_v_north_south:
-             i, j = invmap_v[k_v]
+        for j_coast, i_coast in coast_v_north_south_idx:
  
              # Estrazione dei punti eta vicini al punto v
-             eta_north = eta_field[mapping_t[(i, j+1)]] if (i, j+1) in mapping_t else 0.0
-             eta_south = eta_field[mapping_t[(i, j)]]
+             eta_north = eta_field[mapping_t[(i_coast, j_coast+1)]] if (i_coast, j_coast+1) in mapping_t else 0.0
+             eta_south = eta_field[mapping_t[(i_coast, j_coast)]] if (i_coast, j_coast) in mapping_t else 0.0
  
              # Derivata d eta/dy al punto v
-             deta_dy = (eta_north - eta_south) / e2v[j, i]
+             deta_dy = (eta_north - eta_south) / e2v[j_coast, i_coast]
  
              # Derivata d eta/dx media sui punti u vicini come in K_12 (central difference)
              deta_dx = 0.0
-             n_terms = 0
              
              # contributo riga j
-             if (i+1, j) in mapping_t and (i-1, j) in mapping_t:
-                 eta_right = eta_field[mapping_t[(i+1, j)]]
-                 eta_left  = eta_field[mapping_t[(i-1, j)]]
-                 deta_dx += (eta_right - eta_left) / (2 * e1t[j, i])
-                 n_terms += 1
+             eta_right = eta_field[mapping_t[(i_coast+1, j_coast)]] if (i_coast+1, j_coast) in mapping_t else 0.0
+             eta_left  = eta_field[mapping_t[(i_coast-1, j_coast)]] if (i_coast-1, j_coast) in mapping_t else 0.0
+             deta_dx += (eta_right - eta_left) / (2 * e1t[j_coast, i_coast])
              
              # contributo riga j+1
-             if (i+1, j+1) in mapping_t and (i-1, j+1) in mapping_t:
-                 eta_right = eta_field[mapping_t[(i+1, j+1)]]
-                 eta_left  = eta_field[mapping_t[(i-1, j+1)]]
-                 deta_dx += (eta_right - eta_left) / (2 * e1t[j+1, i])
-                 n_terms += 1
+             eta_right = eta_field[mapping_t[(i_coast+1, j_coast+1)]] if (i_coast+1, j_coast+1) in mapping_t else 0.0
+             eta_left  = eta_field[mapping_t[(i_coast-1, j_coast+1)]] if (i_coast-1, j_coast+1) in mapping_t else 0.0
+             deta_dx += (eta_right - eta_left) / (2 * e1t[j_coast+1, i_coast])
              
-             # divido per numero di contributi se >1 (media)
-             if n_terms > 0:
-                 deta_dx /= n_terms
+             # divido per 1/2 perche' prendo la media tra est ed ovest
+             deta_dx /= 2.0
              
              # Coriolis su griglia v
-             f_v = 0.5 * (coriolis[j, i] + coriolis[j+1, i])
+             f_v = 0.5 * (coriolis[j_coast, i_coast] + coriolis[j_coast, i_coast-1])
              
              # Residuo della condizione al bdy su eta da minimizzare
              residuo_v = np.abs(1j * omega[k_mode] * deta_dy - f_v * deta_dx)
 
-             # Calcolo la soglia su eta in base alla soglia imposta su u e v
-             soglia_eta_bdy=soglia_uv_bdy*(np.abs(omega[k_mode])**2-f_v*f_v)/g
-             soglia_eta_bdy=max(soglia_eta_bdy, soglia_eta_bdy_max)
-
-             if residuo_v > soglia_eta_bdy:
+             # Calcolo la soglia su eta in base alla soglia massima
+             if residuo_v > soglia_eta_bdy_max:
                  valid_mask_eta[k_mode] = False
                  break  # non serve controllare altri punti di bordo per questo modo
  
@@ -770,7 +759,7 @@ print ('Done!')
 if flag_compute_modes != 0 :
 
    print ('Compute K operator')
-   K, mapping_u, mapping_v, mapping_t, invmap_t, invmap_u, invmap_v  = build_operator_K(mask_t, mask_u, mask_v, bathy, coriolis, dxu, dyv, dxt, dyt)
+   K, mapping_u, mapping_v, mapping_t, invmap_t, invmap_u, invmap_v, mapping_not_u, mapping_not_v, invmap_not_u, invmap_not_v  = build_operator_K(mask_t, mask_u, mask_v, bathy, coriolis, dxu, dyv, dxt, dyt)
    print ('Done!')
 
    print ('Compute the modes')
