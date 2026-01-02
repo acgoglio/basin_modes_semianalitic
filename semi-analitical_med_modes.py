@@ -15,7 +15,7 @@ mpl.use('Agg')
 #####################
 # INPUTS
 # Work directory
-work_dir           = "/work/cmcc/ag15419/basin_modes_new/basin_modes_sa_mod6/"
+work_dir           = "/work/cmcc/ag15419/basin_modes_new/basin_modes_sa_mod6t/"
 # Num of modes to be analyzed
 mode_num           = 120
 # The code starts to look for modes around the following period [h]
@@ -39,6 +39,9 @@ bathy_meter_file   = "/work/cmcc/ag15419/VAA_paper/DATA0/bathy_meter.nc"
 # Outfiles 
 outfile_R          = work_dir+'med_modes_'+str(mode_num)+'.nc'
 
+# To compute pure gravitational modes. e.g. with f=0 set flag_RM_coriolis = 1
+flag_RM_coriolis = 0
+
 # If you want to compute the mode flag_compute_modes = 1 
 flag_compute_modes = 1
 
@@ -52,6 +55,9 @@ flag_only_adriatic = 0
 flag_gebco_bathy   = 0
 gebco_bathy        = "/work/cmcc/ag15419/VAA_paper/DATA0/gebco_2024_n46.5_s30.0_w-19.0_e37.0.nc"
 gebco_bathy_int    = work_dir+'bathy_gebco_int.nc' 
+
+# To compute and plot the vorticity set vorticity_flag = 1
+vorticity_flag = 1
 
 #####################
 def prepare_fields(meshmask_path, bathy_path):
@@ -118,10 +124,14 @@ def prepare_fields(meshmask_path, bathy_path):
 
     # Lat
     # Coriolis f su griglia F
-    omega = 7.292115e-5  # rad/s
-    #omega = 0.0 # TMP for debug!
-    coriolis = 2 * omega * np.sin(np.deg2rad(lat_f)) 
-    print ('Coriolis:',coriolis)
+    Omega = 7.292115e-5  # rad/s
+
+    # Pure gravitational modes case:
+    if flag_RM_coriolis == 1:
+       Omega = 0.0 
+
+    coriolis = 2 * Omega * np.sin(np.deg2rad(lat_f)) 
+    
 
     # Grid (dx, dy)
     dxt = ds_mask['e1t'].isel(t=0).values  # m
@@ -169,6 +179,8 @@ def plot_input_fields(mask, bathy, coriolis, dx, dy, filename="input_fields.png"
 
 # Rotation case (K X = lambda X,  X = (u,v,eta) )
 def build_operator_K(mask_t, mask_u, mask_v, bathy, coriolis, e1u, e2v, e1t, e2t, g=9.81):
+    
+    #g = 0 # TMP for tests
 
     # Build the K structure based on t, u and v grids
     # K Matrix structure
@@ -202,20 +214,12 @@ def build_operator_K(mask_t, mask_u, mask_v, bathy, coriolis, e1u, e2v, e1t, e2t
     invmap_u = {}
     idx_u = 0
 
-    mapping_not_u = {}
-    invmap_not_u = {}
-    idx_not_u = 0
-
     for j in range(ny_u):
         for i in range(nx_u):
             if mask_u[j, i]:
                 mapping_u[(i,j)] = idx_u
                 invmap_u[idx_u] = (i,j)
                 idx_u += 1
-            else: 
-                mapping_not_u[(i,j)] = idx_not_u
-                invmap_not_u[idx_u] = (i,j)
-                idx_not_u += 1
 
     N_u = idx_u  # numero di punti mare griglia u
 
@@ -223,20 +227,12 @@ def build_operator_K(mask_t, mask_u, mask_v, bathy, coriolis, e1u, e2v, e1t, e2t
     invmap_v = {}
     idx_v = 0
 
-    mapping_not_v = {}
-    invmap_not_v = {}
-    idx_not_v = 0
-
     for j in range(ny_v):
         for i in range(nx_v):
             if mask_v[j, i]:
                 mapping_v[(i,j)] = idx_v
                 invmap_v[idx_v] = (i,j)
                 idx_v += 1
-            else:
-                mapping_not_v[(i,j)] = idx_not_v
-                invmap_not_v[idx_v] = (i,j)
-                idx_not_v += 1
     N_v = idx_v  # numero di punti mare griglia v
 
     # offset globali per u, v, eta
@@ -288,7 +284,8 @@ def build_operator_K(mask_t, mask_u, mask_v, bathy, coriolis, e1u, e2v, e1t, e2t
             continue
     
         # f interpolata al punto v
-        f_v = 0.5 * (coriolis[j, i] + coriolis[j, i-1])
+        #f_v = 0.5 * (coriolis[j, i] + coriolis[j, i-1])
+        f_v = coriolis[j, i]
     
         # u vicini (4 punti) attorno a v
         u_indices = [
@@ -413,11 +410,13 @@ def build_operator_K(mask_t, mask_u, mask_v, bathy, coriolis, e1u, e2v, e1t, e2t
     N = N_u + N_v + N_t
     K = sp.csr_matrix((data_all, (rows_all, cols_all)), shape=(N, N))
 
-    return K, mapping_u, mapping_v, mapping_t, invmap_t, invmap_u, invmap_v, mapping_not_u, mapping_not_v, invmap_not_u, invmap_not_v
+    return K, mapping_u, mapping_v, mapping_t, invmap_t, invmap_u, invmap_v
 
 
 # Rot case
 def compute_barotropic_modes_K_eta_only(K, mask_t, mask_u, mask_v, e1u, e2v,  e1t, e2t, bathy, k=10, which='LM', reference_period=24, tol_imag=1e-6, g=9.81):
+
+    #g = 0 # TMP for tests
 
     N_t = mask_t.sum()  # numero di punti mare sulla griglia eta
     N_u = mask_u.sum()  # numero di punti mare sulla griglia u
@@ -430,7 +429,7 @@ def compute_barotropic_modes_K_eta_only(K, mask_t, mask_u, mask_v, e1u, e2v,  e1
 
     # Risolvo K X = lambda X
     eigvals, eigvecs = spla.eigs(K, k=k, sigma=sigma, which=which)
-    print("Eigenvalues:", eigvals)
+    #print("Eigenvalues:", eigvals)
 
     # --- FILTRO sugli autovalori ---
     offset_eta = mask_u.sum() + mask_v.sum()  # offset globale per eta
@@ -496,11 +495,15 @@ def compute_barotropic_modes_K_eta_only(K, mask_t, mask_u, mask_v, e1u, e2v,  e1
     valid_mask_eta = np.ones(n_before_eta_bdy, dtype=bool)
 
     # La soglia su residual_eta
-    soglia_eta_bdy_max = 1e-6
+    #soglia_eta_bdy_max = 1e-6
+    soglia_eta_bdy_u = 2.5e-7
+    soglia_eta_bdy_v = 3.5e-7
 
     # Loop su tutti i modi
     for k_mode in range(n_before_eta_bdy):
      eta_field = eta_modes[:, k_mode]
+     u_field = u_modes[:, k_mode]
+     v_field = v_modes[:, k_mode]
  
      # 1) Punti di bordo sulla griglia u (est/ovest)
      for j_coast, i_coast in coast_u_east_west_idx:
@@ -533,10 +536,9 @@ def compute_barotropic_modes_K_eta_only(K, mask_t, mask_u, mask_v, e1u, e2v,  e1
          
          # Residuo della condizione al bdy su eta da minimizzare
          residuo_u = np.abs(1j * omega[k_mode] * deta_dx + f_u * deta_dy)
-         print ('Prova residuo_u',residuo_u)
 
-         # Calcolo la soglia su eta in base alla soglia massima
-         if residuo_u > soglia_eta_bdy_max:
+         # Impongo la soglia su eta 
+         if residuo_u > soglia_eta_bdy_u :
              valid_mask_eta[k_mode] = False
              break  # non serve controllare altri punti di bordo per questo modo
  
@@ -568,13 +570,14 @@ def compute_barotropic_modes_K_eta_only(K, mask_t, mask_u, mask_v, e1u, e2v,  e1
              deta_dx /= 2.0
              
              # Coriolis su griglia v
-             f_v = 0.5 * (coriolis[j_coast, i_coast] + coriolis[j_coast, i_coast-1])
-             
+             #f_v = 0.5 * (coriolis[j_coast, i_coast] + coriolis[j_coast, i_coast-1])
+             f_v = coriolis[j_coast, i_coast]
+
              # Residuo della condizione al bdy su eta da minimizzare
              residuo_v = np.abs(1j * omega[k_mode] * deta_dy - f_v * deta_dx)
 
-             # Calcolo la soglia su eta in base alla soglia massima
-             if residuo_v > soglia_eta_bdy_max:
+             # Impongo la soglia su eta
+             if residuo_v > soglia_eta_bdy_v :
                  valid_mask_eta[k_mode] = False
                  break  # non serve controllare altri punti di bordo per questo modo
  
@@ -584,6 +587,8 @@ def compute_barotropic_modes_K_eta_only(K, mask_t, mask_u, mask_v, e1u, e2v,  e1
        omega     = omega[valid_mask_eta]
        period    = 2 * np.pi / omega / 3600
        eta_modes = eta_modes[:, valid_mask_eta]
+       u_modes   = u_modes[:, valid_mask_eta]
+       v_modes   = v_modes[:, valid_mask_eta]
  
        n_after_eta_bdy = eta_modes.shape[1]
        print(f"Filtro bdy condition su eta: rimossi {n_before_eta_bdy - n_after_eta_bdy} modi su {n_before_eta_bdy}")
@@ -596,12 +601,61 @@ def compute_barotropic_modes_K_eta_only(K, mask_t, mask_u, mask_v, e1u, e2v,  e1
 
     # Periodi in ore
     period = 2 * np.pi / omega / 3600
-    print("all periods:", period)
+    #print("all periods:", period)
 
+    # Per la fase calcolo tan-1(-eta_imm/eta_re)
+    theta_modes = np.arctan2(-np.imag(eta_modes), np.real(eta_modes))
     # Per l'ampiezza calcolo il modulo sqrt(Re*2+Im*2)
     eta_modes =  np.sqrt(np.real(eta_modes)**2 + np.imag(eta_modes)**2)
+    u_modes =  np.sqrt(np.real(u_modes)**2 + np.imag(u_modes)**2)
+    v_modes =  np.sqrt(np.real(v_modes)**2 + np.imag(v_modes)**2)
 
-    return omega, period, eta_modes
+    return omega, period, eta_modes, theta_modes, u_modes, v_modes
+
+# Controllo vorticita' dei modi
+def compute_modes_vorticity(eta_modes, u_modes, v_modes, mask_t, mask_u, mask_v, e1u, e2v, coriolis, bathy, threshold_rot=0.3, threshold_grav=0.1):
+
+    n_modes = eta_modes.shape[1]
+    vorticity_rms = np.zeros(n_modes)
+    vorticity_max = np.zeros(n_modes)
+    vorticity_mean = np.zeros(n_modes)
+    Pvorticity_rms = np.zeros(n_modes)
+    Pvorticity_max = np.zeros(n_modes)
+    Pvorticity_mean = np.zeros(n_modes)
+
+    for k_mode in range(n_modes):
+
+        # Ricostruisco u/v 2D dall 1D
+        u_field = np.zeros(mask_u.shape)
+        v_field = np.zeros(mask_v.shape)
+        u_field[mask_u] = u_modes[:, k_mode]
+        v_field[mask_v] = v_modes[:, k_mode]
+
+        # Calcolo vorticità relativa sulla F-grid
+        # zeta_ij = dv/dx - du/dy
+        dv_dx = (v_field[1:, :] - v_field[:-1, :]) / e1u[:-1, :]
+        du_dy = (u_field[:, 1:] - u_field[:, :-1]) / e2v[:, :-1]
+        zeta = dv_dx[:, :-1] - du_dy[:-1, :]
+
+        # H su griglia F (centrata tra i punti T)
+        H_F = 0.25 * (bathy[:-1, :-1] + bathy[1:, :-1] + bathy[:-1, 1:] + bathy[1:, 1:])
+
+        # PV sulla F-grid
+        mask_F = H_F != 0
+        PV = np.full_like(H_F, np.nan, dtype=float)
+        PV[mask_F] = (zeta[mask_F] + coriolis[mask_F]) / H_F[mask_F]
+
+        # Vorticita' relativa
+        rms_zeta = np.sqrt(np.nanmean(zeta**2))
+        vorticity_rms[k_mode] = rms_zeta
+        vorticity_max[k_mode] = np.nanmax(zeta)
+        vorticity_mean[k_mode] = np.nanmean(zeta)
+        # Vorticita' Potenziale
+        Pvorticity_rms[k_mode] = np.sqrt(np.nanmean(PV**2))
+        Pvorticity_max[k_mode] = np.nanmax(PV)
+        Pvorticity_mean[k_mode] = np.nanmean(PV)
+
+    return PV, Pvorticity_rms, Pvorticity_max, Pvorticity_mean, vorticity_rms, vorticity_max, vorticity_mean
 
 def reconstruct_modes(modes, invmap, shape):
     Nmodes = modes.shape[1]
@@ -667,6 +721,12 @@ def plot_mode(mode_2d, mask, lon_nemo, lat_nemo, title="", filename="mode.png", 
     else:
        plt.figure(figsize=(10, 4))
 
+    # Stampa l'ampiezza massima, media e RMS prima della normalizzazione
+    #print(f" Max Amp:  {np.nanmax(np.abs(mode_2d)):.3e}")
+    #print(f" Mean Amp: {np.nanmean(np.abs(mode_2d)):.3e}")
+    #print(f"RMS Amp: {np.sqrt(np.nanmean(np.abs(mode_2d)**2)):.3e}")
+
+
     # Normalizza a 100 sul valore massimo o sul 99th percentile
     #norm_mode = np.abs(mode_2d) / np.nanmax(np.abs(mode_2d)) * 100
     p99 = np.nanpercentile(np.abs(mode_2d), 99)
@@ -719,6 +779,130 @@ def plot_mode(mode_2d, mask, lon_nemo, lat_nemo, title="", filename="mode.png", 
     plt.savefig(filename_abs, dpi=dpi)
     plt.close()
 
+# Plot di mean e max amplitude per ogni modo
+def plot_all_modes_amplitude(modes_2D, period, work_dir="", flag_only_adriatic=0, dpi=150,Pvorticity_rms=None, Pvorticity_max=None, Pvorticity_mean=None, vorticity_rms=None, vorticity_max=None, vorticity_mean=None):
+    
+    n_modes  = len(modes_2D)
+    max_amp  = np.zeros(n_modes)
+    mean_amp = np.zeros(n_modes)
+    rms_amp  = np.zeros(n_modes)
+    
+    # Calcola max e mean per ogni modo
+    for i in range(n_modes):
+        max_amp[i]  = np.nanmax(np.abs(modes_2D[i]))
+        mean_amp[i] = np.nanmean(np.abs(modes_2D[i]))
+        rms_amp[i]  = np.sqrt(np.nanmean(np.abs(modes_2D[i])**2))
+    
+    # Plot max amplitude
+    plt.figure(figsize=(12,4))
+    plt.plot(range(n_modes), max_amp, 'o-', label="Max amplitude", color='tab:orange')
+    plt.xticks(range(n_modes), [f"{p:.2f}h" for p in period], rotation=45)
+    plt.xlabel("Mode (Period)")
+    plt.ylabel("Max amplitude (m)")
+    plt.title("Maximum amplitude per mode")
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig(f"{work_dir}/all_modes_max_amplitude.png", dpi=dpi)
+    plt.close()
+    
+    # Plot mean amplitude
+    plt.figure(figsize=(12,4))
+    plt.plot(range(n_modes), mean_amp, 'o-', label="Mean amplitude", color='tab:blue')
+    plt.xticks(range(n_modes), [f"{p:.2f}h" for p in period], rotation=45)
+    plt.xlabel("Mode (Period)")
+    plt.ylabel("Mean amplitude (m)")
+    plt.title("Mean amplitude per mode")
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig(f"{work_dir}/all_modes_mean_amplitude.png", dpi=dpi)
+    plt.close()
+
+    # Plot rms amplitude
+    plt.figure(figsize=(12,4))
+    plt.plot(range(n_modes), rms_amp, 'o-', label="RMS amplitude", color='tab:red')
+    plt.xticks(range(n_modes), [f"{p:.2f}h" for p in period], rotation=45)
+    plt.xlabel("Mode (Period)")
+    plt.ylabel("Amplitude RMS (m)")
+    plt.ylim(0.0,0.003)
+    plt.title("Amplitude RMS per mode")
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig(f"{work_dir}/all_modes_rms_amplitude.png", dpi=dpi)
+    plt.close()
+    
+    # Plot RMS, Mean and Max vorticity (se ho calcolato la vorticity)
+    if vorticity_rms is not None:
+        plt.figure(figsize=(12,4))
+        plt.plot(range(n_modes), vorticity_rms, 'o-', label="RMS vorticity", color='tab:red')
+        plt.xticks(range(n_modes), [f"{p:.2f}h" for p in period], rotation=45)
+        plt.xlabel("Mode (Period)")
+        plt.ylabel("RMS vorticity (1/s)")
+        plt.title("RMS Vorticity per mode")
+        plt.grid(True)
+        plt.tight_layout()
+        plt.savefig(f"{work_dir}/all_modes_rms_vorticity.png", dpi=dpi)
+        plt.close()
+
+    if vorticity_max is not None:
+        plt.figure(figsize=(12,4))
+        plt.plot(range(n_modes), vorticity_max, 'o-', label="Max vorticity", color='tab:orange')
+        plt.xticks(range(n_modes), [f"{p:.2f}h" for p in period], rotation=45)
+        plt.xlabel("Mode (Period)")
+        plt.ylabel("Max vorticity (1/s)")
+        plt.title("Max Vorticity per mode")
+        plt.grid(True)
+        plt.tight_layout()
+        plt.savefig(f"{work_dir}/all_modes_max_vorticity.png", dpi=dpi)
+        plt.close()
+
+    if vorticity_mean is not None:
+        plt.figure(figsize=(12,4))
+        plt.plot(range(n_modes), vorticity_max, 'o-', label="Mean vorticity")
+        plt.xticks(range(n_modes), [f"{p:.2f}h" for p in period], rotation=45)
+        plt.xlabel("Mode (Period)")
+        plt.ylabel("Mean vorticity (1/s)")
+        plt.title("Mean Vorticity per mode")
+        plt.grid(True)
+        plt.tight_layout()
+        plt.savefig(f"{work_dir}/all_modes_mean_vorticity.png", dpi=dpi)
+        plt.close()
+
+    if Pvorticity_mean is not None:
+        plt.figure(figsize=(12,4))
+        plt.plot(range(n_modes), Pvorticity_max, 'o-', label="Mean vorticity", color='tab:blue')
+        plt.xticks(range(n_modes), [f"{p:.2f}h" for p in period], rotation=45)
+        plt.xlabel("Mode (Period)")
+        plt.ylabel("Mean vorticity (1/s)")
+        plt.title("Mean Vorticity per mode")
+        plt.grid(True)
+        plt.tight_layout()
+        plt.savefig(f"{work_dir}/all_modes_mean_Pvorticity.png", dpi=dpi)
+        plt.close()    
+
+    if Pvorticity_rms is not None:
+        plt.figure(figsize=(12,4))
+        plt.plot(range(n_modes), Pvorticity_rms, 'o-', label="RMS vorticity", color='tab:red')
+        plt.xticks(range(n_modes), [f"{p:.2f}h" for p in period], rotation=45)
+        plt.xlabel("Mode (Period)")
+        plt.ylabel("RMS vorticity (1/s)")
+        plt.title("RMS Vorticity per mode")
+        plt.grid(True)
+        plt.tight_layout()
+        plt.savefig(f"{work_dir}/all_modes_rms_Pvorticity.png", dpi=dpi)
+        plt.close()
+
+    if Pvorticity_max is not None:
+        plt.figure(figsize=(12,4))
+        plt.plot(range(n_modes), Pvorticity_max, 'o-', label="Max vorticity", color='tab:orange')
+        plt.xticks(range(n_modes), [f"{p:.2f}h" for p in period], rotation=45)
+        plt.xlabel("Mode (Period)")
+        plt.ylabel("Max vorticity (1/s)")
+        plt.title("Max Vorticity per mode")
+        plt.grid(True)
+        plt.tight_layout()
+        plt.savefig(f"{work_dir}/all_modes_max_Pvorticity.png", dpi=dpi)
+        plt.close()
+
 # Truncate the colormap to exclude the lightest part (e.g. bottom 20%)
 def truncate_colormap(cmap, minval=0.2, maxval=1.0, n=256):
     new_cmap = LinearSegmentedColormap.from_list(
@@ -759,11 +943,11 @@ print ('Done!')
 if flag_compute_modes != 0 :
 
    print ('Compute K operator')
-   K, mapping_u, mapping_v, mapping_t, invmap_t, invmap_u, invmap_v, mapping_not_u, mapping_not_v, invmap_not_u, invmap_not_v  = build_operator_K(mask_t, mask_u, mask_v, bathy, coriolis, dxu, dyv, dxt, dyt)
+   K, mapping_u, mapping_v, mapping_t, invmap_t, invmap_u, invmap_v  = build_operator_K(mask_t, mask_u, mask_v, bathy, coriolis, dxu, dyv, dxt, dyt)
    print ('Done!')
 
    print ('Compute the modes')
-   omega, period, eta_modes = compute_barotropic_modes_K_eta_only(K, mask_t, mask_u, mask_v, dxu, dyv, dxt, dyt, bathy, k=mode_num, which=eig_order,reference_period=reference_period)
+   omega, period, eta_modes, theta_modes, u_modes, v_modes = compute_barotropic_modes_K_eta_only(K, mask_t, mask_u, mask_v, dxu, dyv, dxt, dyt, bathy, k=mode_num, which=eig_order,reference_period=reference_period)
    modes=eta_modes
    print ('Done!')
 
@@ -780,6 +964,10 @@ if flag_compute_modes != 0 :
    modes_2D = reconstruct_modes(modes, invmap_t, shape)
    print ('Done!')
 
+   print("Compute vorticity for each mode")
+   if vorticity_flag == 1 :
+      vorticity, Pvorticity_rms, Pvorticity_max, Pvorticity_mean, vorticity_rms, vorticity_max, vorticity_mean  = compute_modes_vorticity( eta_modes, u_modes, v_modes, mask_t, mask_u, mask_v, dxu, dyv, coriolis, bathy)
+
    print ('Save the R modes')
    save_modes_to_netcdf(outfile_R, modes_2D, period, mask=mask_t)
    print ('Done!')
@@ -790,7 +978,6 @@ else:
    print ('Done!')
 
 print ('Plot the R modes amplitude')
-print ('Print and plot only the modes with a relevant amplitude')
 
 # Ordina gli indici dei modi per periodo decrescente
 sorted_indices = np.argsort(-period)
@@ -811,3 +998,23 @@ for m in sorted_indices:
     plot_mode(modes_2D[m], mask_t, lon_nemo, lat_nemo, title=title, filename=filename, filename_abs=filename_abs)
     renum += 1
 
+
+# Creo un plot con ampiezze massime, medie e distribuzione dell'ampiezza per ogni modo
+modes_sorted = [modes_2D[m] for m in sorted_indices]
+period_sorted = [period[m] for m in sorted_indices]
+if vorticity_flag == 1 :
+   vorticity_rms_sorted = [vorticity_rms[m] for m in sorted_indices]
+   vorticity_max_sorted = [vorticity_max[m] for m in sorted_indices]
+   vorticity_mean_sorted = [vorticity_mean[m] for m in sorted_indices]
+   Pvorticity_rms_sorted = [Pvorticity_rms[m] for m in sorted_indices]
+   Pvorticity_max_sorted = [Pvorticity_max[m] for m in sorted_indices]
+   Pvorticity_mean_sorted = [Pvorticity_mean[m] for m in sorted_indices]
+else: 
+   vorticity_rms_sorted = None
+   vorticity_max_sorted = None
+   vorticity_mean_sorted = None
+   Pvorticity_rms_sorted = None
+   Pvorticity_max_sorted = None
+   Pvorticity_mean_sorted = None
+
+plot_all_modes_amplitude(modes_sorted, period_sorted, work_dir=work_dir, Pvorticity_rms=Pvorticity_rms_sorted, Pvorticity_max=Pvorticity_max_sorted, Pvorticity_mean=Pvorticity_mean_sorted, vorticity_rms=vorticity_rms_sorted, vorticity_max=vorticity_max_sorted, vorticity_mean=vorticity_mean_sorted)
