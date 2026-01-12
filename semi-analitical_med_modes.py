@@ -15,7 +15,7 @@ mpl.use('Agg')
 #####################
 # INPUTS
 # Work directory
-work_dir           = "/work/cmcc/ag15419/basin_modes_new/basin_modes_sa_mod6t/"
+work_dir           = "/work/cmcc/ag15419/basin_modes_new/basin_modes_sa_mod7/"
 # Num of modes to be analyzed
 mode_num           = 120
 # The code starts to look for modes around the following period [h]
@@ -57,7 +57,10 @@ gebco_bathy        = "/work/cmcc/ag15419/VAA_paper/DATA0/gebco_2024_n46.5_s30.0_
 gebco_bathy_int    = work_dir+'bathy_gebco_int.nc' 
 
 # To compute and plot the vorticity set vorticity_flag = 1
-vorticity_flag = 1
+vorticity_flag = 0
+
+# To compute and plot the PE/KE ratio set flag_PE_KE_ratio = 1
+flag_PE_KE_ratio = 1
 
 #####################
 def prepare_fields(meshmask_path, bathy_path):
@@ -657,6 +660,67 @@ def compute_modes_vorticity(eta_modes, u_modes, v_modes, mask_t, mask_u, mask_v,
 
     return PV, Pvorticity_rms, Pvorticity_max, Pvorticity_mean, vorticity_rms, vorticity_max, vorticity_mean
 
+import numpy as np
+
+# Calcolo PE/KE per i modi
+def compute_modes_PE_KE(eta_modes, u_modes, v_modes, mask_t, mask_u, mask_v, e1u, e2v, e1t, e2t, bathy, g=9.81):
+
+    n_modes = eta_modes.shape[1]
+    PE_KE_ratio = np.zeros(n_modes)
+    PE_modes = np.zeros(n_modes)
+    KE_modes = np.zeros(n_modes)
+
+    for k_mode in range(n_modes):
+
+        # Ricostruisco u/v 2D dall'1D
+        u_field = np.zeros(mask_u.shape)
+        v_field = np.zeros(mask_v.shape)
+        eta_field = np.zeros(mask_t.shape)
+        u_field[mask_u] = u_modes[:, k_mode]
+        v_field[mask_v] = v_modes[:, k_mode]
+        eta_field[mask_t] = eta_modes[:, k_mode]
+
+        # U -> T interna
+        u_T = 0.5 * (u_field[1:, :] + u_field[:-1, :])
+        # V -> T interna
+        v_T = 0.5 * (v_field[:, 1:] + v_field[:, :-1])
+
+        # --- H e eta su T ---
+        bathy_T = bathy
+        eta_T = eta_field 
+
+        # Taglio tutto a dimensione bathy        
+        u_T = u_T[:, :bathy.shape[1]]
+        v_T = v_T[:bathy.shape[0], :]
+        eta_T = eta_field[:bathy.shape[0], :bathy.shape[1]]
+        e1t_T = e1t[:bathy.shape[0], :bathy.shape[1]]
+        e2t_T = e2t[:bathy.shape[0], :bathy.shape[1]]
+
+        # Area celle
+        cell_area = e1t_T * e2t_T
+
+        # --- Energia cinetica e potenziale ---
+        mask = bathy_T > 0
+        print ('PROVA',np.max(bathy_T[mask]))
+        print("max u,v:", np.max(u_T[mask]), np.max(v_T[mask]))
+        print("max eta:", np.max(eta_T[mask]))
+        KE = 0.5 * (bathy_T[mask]+eta_T[mask]) * (u_T[mask]**2 + v_T[mask]**2)*cell_area[mask]
+        PE = 0.5 * 9.81 * (eta_T[mask]**2)*cell_area[mask]
+
+        # --- Integrazione sul dominio ---
+        KE_total = np.nansum(KE)
+        PE_total = np.nansum(PE)
+
+        KE_modes[k_mode] = KE_total
+        PE_modes[k_mode] = PE_total
+        print ('KE_total',KE_total)
+        print ('PE_total',PE_total)
+        PE_KE_ratio[k_mode] = PE_total / KE_total if KE_total != 0 else np.nan
+        print ('PE_KE_ratio',PE_total / KE_total)
+
+    return PE_KE_ratio, PE_modes, KE_modes
+
+
 def reconstruct_modes(modes, invmap, shape):
     Nmodes = modes.shape[1]
     ny, nx = shape
@@ -780,7 +844,7 @@ def plot_mode(mode_2d, mask, lon_nemo, lat_nemo, title="", filename="mode.png", 
     plt.close()
 
 # Plot di mean e max amplitude per ogni modo
-def plot_all_modes_amplitude(modes_2D, period, work_dir="", flag_only_adriatic=0, dpi=150,Pvorticity_rms=None, Pvorticity_max=None, Pvorticity_mean=None, vorticity_rms=None, vorticity_max=None, vorticity_mean=None):
+def plot_all_modes_amplitude(modes_2D, period, work_dir="", flag_only_adriatic=0, dpi=150,Pvorticity_rms=None, Pvorticity_max=None, Pvorticity_mean=None, vorticity_rms=None, vorticity_max=None, vorticity_mean=None, PE_KE_ratio=None, PE=None, KE=None):
     
     n_modes  = len(modes_2D)
     max_amp  = np.zeros(n_modes)
@@ -903,6 +967,46 @@ def plot_all_modes_amplitude(modes_2D, period, work_dir="", flag_only_adriatic=0
         plt.savefig(f"{work_dir}/all_modes_max_Pvorticity.png", dpi=dpi)
         plt.close()
 
+    if PE_KE_ratio is not None:
+        plt.figure(figsize=(12,4))
+        plt.plot(range(n_modes), PE_KE_ratio, 'o-', label="PE/KE", color='tab:green')
+        plt.xticks(range(n_modes), [f"{p:.2f}h" for p in period], rotation=45)
+        plt.xlabel("Mode (Period)")
+        plt.ylabel("PE/KE")
+        #plt.x=ylim(-1,2)
+        plt.yscale('log')
+        plt.title("PE/KE ratio per mode")
+        plt.grid(True)
+        plt.tight_layout()
+        plt.savefig(f"{work_dir}/all_modes_PE_KE_ratio.png", dpi=dpi)
+        plt.close()
+
+    if PE is not None:
+        plt.figure(figsize=(12,4))
+        plt.plot(range(n_modes), PE, 'o-', label="PE", color='tab:red')
+        plt.xticks(range(n_modes), [f"{p:.2f}h" for p in period], rotation=45)
+        plt.xlabel("Mode (Period)")
+        plt.ylabel("PE [J]")
+        #plt.xlim(-1,2)
+        plt.title("Potential Energy per mode")
+        plt.grid(True)
+        plt.tight_layout()
+        plt.savefig(f"{work_dir}/all_modes_PE.png", dpi=dpi)
+        plt.close()
+
+    if KE is not None:
+        plt.figure(figsize=(12,4))
+        plt.plot(range(n_modes), KE, 'o-', label="KE", color='tab:blue')
+        plt.xticks(range(n_modes), [f"{p:.2f}h" for p in period], rotation=45)
+        plt.xlabel("Mode (Period)")
+        plt.ylabel("KE [J]")
+        #plt.xlim(-1,2)
+        plt.title("Kinetic Energy per mode")
+        plt.grid(True)
+        plt.tight_layout()
+        plt.savefig(f"{work_dir}/all_modes_KE.png", dpi=dpi)
+        plt.close()
+
 # Truncate the colormap to exclude the lightest part (e.g. bottom 20%)
 def truncate_colormap(cmap, minval=0.2, maxval=1.0, n=256):
     new_cmap = LinearSegmentedColormap.from_list(
@@ -968,6 +1072,9 @@ if flag_compute_modes != 0 :
    if vorticity_flag == 1 :
       vorticity, Pvorticity_rms, Pvorticity_max, Pvorticity_mean, vorticity_rms, vorticity_max, vorticity_mean  = compute_modes_vorticity( eta_modes, u_modes, v_modes, mask_t, mask_u, mask_v, dxu, dyv, coriolis, bathy)
 
+   if flag_PE_KE_ratio == 1:
+      PE_KE_ratio, PE, KE  = compute_modes_PE_KE( eta_modes, u_modes, v_modes, mask_t, mask_u, mask_v, dxu, dyv, dxt, dyt, coriolis, bathy)
+
    print ('Save the R modes')
    save_modes_to_netcdf(outfile_R, modes_2D, period, mask=mask_t)
    print ('Done!')
@@ -1017,4 +1124,14 @@ else:
    Pvorticity_max_sorted = None
    Pvorticity_mean_sorted = None
 
-plot_all_modes_amplitude(modes_sorted, period_sorted, work_dir=work_dir, Pvorticity_rms=Pvorticity_rms_sorted, Pvorticity_max=Pvorticity_max_sorted, Pvorticity_mean=Pvorticity_mean_sorted, vorticity_rms=vorticity_rms_sorted, vorticity_max=vorticity_max_sorted, vorticity_mean=vorticity_mean_sorted)
+if flag_PE_KE_ratio == 1:
+   print ('PE_KE_ratio',PE_KE_ratio)
+   PE_KE_ratio_sorted = [PE_KE_ratio[m] for m in sorted_indices]
+   PE_sorted = [PE[m] for m in sorted_indices]
+   KE_sorted = [KE[m] for m in sorted_indices]
+else:
+   PE_KE_ratio_sorted = None
+   PE = None
+   KE = None
+
+plot_all_modes_amplitude(modes_sorted, period_sorted, work_dir=work_dir, Pvorticity_rms=Pvorticity_rms_sorted, Pvorticity_max=Pvorticity_max_sorted, Pvorticity_mean=Pvorticity_mean_sorted, vorticity_rms=vorticity_rms_sorted, vorticity_max=vorticity_max_sorted, vorticity_mean=vorticity_mean_sorted, PE_KE_ratio=PE_KE_ratio_sorted, PE=PE_sorted, KE=KE_sorted )
