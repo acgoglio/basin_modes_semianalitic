@@ -15,16 +15,16 @@ mpl.use('Agg')
 #####################
 # INPUTS
 # Work directory
-work_dir           = "/work/cmcc/ag15419/basin_modes_new/basin_modes_sa_mod7/"
-# Num of modes to be analyzed
-mode_num           = 120
-# The code starts to look for modes around the following period [h]
+work_dir           = "/work/cmcc/ag15419/basin_modes_new/basin_modes_sa_sign/"
+# Num of modes to be analyzed (e.g. 120)
+mode_num           = 120 
+# The code starts to look for modes around the following period [h], e.g. 10
 reference_period   = 10
-# Order the modes from the smallest or from the greatest ('SM' or 'LM')
+# Order the modes from the smallest or from the greatest ('SM' or 'LM'), e.g. LM
 eig_order          = 'LM'
-# Min val of the modes periods [h]
-Tmin               = 2
-# Max val of the modes periods [h]
+# Min val of the modes periods [h], e.g. 3
+Tmin               = 3
+# Max val of the modes periods [h], e.g. 40
 Tmax               = 40
 # Amplitude palette limits [-Plot_max,Plot_max] [%]
 Plot_max           = 100
@@ -777,9 +777,9 @@ def load_modes_from_netcdf(filename,meshmask_path):
         mask = ds.variables['mask'][:] if 'mask' in ds.variables else None
     return modes_2D, periods, mask, lon_nemo, lat_nemo
 
-def plot_mode(mode_2d, mask, lon_nemo, lat_nemo, title="", filename="mode.png", filename_abs="mode_abs.png", cmap="RdBu_r", cmap_abs="gist_stern_r", dpi=150, n_levels=41): 
+def plot_mode(mode_2d, mask, lon_nemo, lat_nemo, title="", filename="mode_sgn.png", filename_abs="mode_abs.png", cmap="RdBu_r", cmap_abs="gist_stern_r", dpi=150, n_levels=41): 
 
-    # Abs plot
+    # 1) Abs plot
     if flag_only_adriatic == 1:
        plt.figure(figsize=(5, 4))
     else:
@@ -843,6 +843,9 @@ def plot_mode(mode_2d, mask, lon_nemo, lat_nemo, title="", filename="mode.png", 
     plt.savefig(filename_abs, dpi=dpi)
     plt.close()
 
+    # 2) Plot  con il segno dell'ampiezza
+    # To be implemented (the phase is needed!)
+
 # Plot di mean e max amplitude per ogni modo
 def plot_all_modes_amplitude(modes_2D, period, work_dir="", flag_only_adriatic=0, dpi=150,Pvorticity_rms=None, Pvorticity_max=None, Pvorticity_mean=None, vorticity_rms=None, vorticity_max=None, vorticity_mean=None, PE_KE_ratio=None, PE=None, KE=None):
     
@@ -882,17 +885,40 @@ def plot_all_modes_amplitude(modes_2D, period, work_dir="", flag_only_adriatic=0
     plt.close()
 
     # Plot rms amplitude
+    rms_amp = np.array(rms_amp)
+    period = np.array(period)
+    x = np.arange(len(period))
+    threshold = 0.002  # soglia in metri
     plt.figure(figsize=(12,4))
-    plt.plot(range(n_modes), rms_amp, 'o-', label="RMS amplitude", color='tab:red')
-    plt.xticks(range(n_modes), [f"{p:.2f}h" for p in period], rotation=45)
+    # marker sotto soglia -> blu
+    mask_below = rms_amp < threshold
+    plt.plot(x[mask_below], rms_amp[mask_below], 'o', color='tab:blue')
+    # marker sopra soglia -> rosso
+    mask_above = rms_amp >= threshold
+    plt.plot(x[mask_above], rms_amp[mask_above], 'o', color='tab:red')
+    # plot
+    plt.xticks(x, [f"{p:.2f}h" for p in period], rotation=45)
     plt.xlabel("Mode (Period)")
     plt.ylabel("Amplitude RMS (m)")
-    plt.ylim(0.0,0.003)
+    plt.ylim(0,0.003)
     plt.title("Amplitude RMS per mode")
-    plt.grid(True)
+    plt.grid(True, alpha=0.3)
     plt.tight_layout()
     plt.savefig(f"{work_dir}/all_modes_rms_amplitude.png", dpi=dpi)
     plt.close()
+
+    # Old plot
+    #plt.figure(figsize=(12,4))
+    #plt.plot(range(n_modes), rms_amp, 'o-', label="RMS amplitude", color='tab:red')
+    #plt.xticks(range(n_modes), [f"{p:.2f}h" for p in period], rotation=45)
+    #plt.xlabel("Mode (Period)")
+    #plt.ylabel("Amplitude RMS (m)")
+    #plt.ylim(0.0,0.003)
+    #plt.title("Amplitude RMS per mode")
+    #plt.grid(True)
+    #plt.tight_layout()
+    #plt.savefig(f"{work_dir}/all_modes_rms_amplitude.png", dpi=dpi)
+    #plt.close()
     
     # Plot RMS, Mean and Max vorticity (se ho calcolato la vorticity)
     if vorticity_rms is not None:
@@ -982,26 +1008,50 @@ def plot_all_modes_amplitude(modes_2D, period, work_dir="", flag_only_adriatic=0
         plt.close()
 
     if PE is not None:
+        PE = np.array(PE)
+        period = np.array(period)
+        x = np.arange(len(period))
+        threshold = 5e7  # esempio di soglia, cambia se vuoi
         plt.figure(figsize=(12,4))
-        plt.plot(range(n_modes), PE, 'o-', label="PE", color='tab:red')
-        plt.xticks(range(n_modes), [f"{p:.2f}h" for p in period], rotation=45)
+        # marker sotto soglia -> tab:green
+        mask_lower = PE < threshold
+        plt.plot(x[mask_lower], PE[mask_lower], 'o', color='tab:green')
+        # marker sopra soglia -> magenta
+        mask_upper = PE >= threshold
+        plt.plot(x[mask_upper], PE[mask_upper], 'o', color='magenta')
+        plt.xticks(x, [f"{p:.2f}h" for p in period], rotation=45)
         plt.xlabel("Mode (Period)")
-        plt.ylabel("PE [J]")
-        #plt.xlim(-1,2)
-        plt.title("Potential Energy per mode")
-        plt.grid(True)
+        plt.ylabel("PE [m5/s2]")
+        plt.ylim(0.0,100000000)
+        ymin, ymax = 0, 1e8
+        plt.yticks(np.arange(ymin, ymax+1, 1e7))  # ogni 10 milioni
+        plt.title("Potential Energy per unit density per mode")
+        plt.grid(True, alpha=0.3)
         plt.tight_layout()
         plt.savefig(f"{work_dir}/all_modes_PE.png", dpi=dpi)
         plt.close()
+
+        # Old Plot
+        #plt.figure(figsize=(12,4))
+        #plt.plot(range(n_modes), PE, 'o-', label="PE", color='tab:red')
+        #plt.xticks(range(n_modes), [f"{p:.2f}h" for p in period], rotation=45)
+        #plt.xlabel("Mode (Period)")
+        #plt.ylabel("PE [m5/s2]")
+        #plt.ylim(0.0,100000000)
+        #plt.title("Potential Energy per unit density per mode")
+        #plt.grid(True)
+        #plt.tight_layout()
+        #plt.savefig(f"{work_dir}/all_modes_PE.png", dpi=dpi)
+        #plt.close()
 
     if KE is not None:
         plt.figure(figsize=(12,4))
         plt.plot(range(n_modes), KE, 'o-', label="KE", color='tab:blue')
         plt.xticks(range(n_modes), [f"{p:.2f}h" for p in period], rotation=45)
         plt.xlabel("Mode (Period)")
-        plt.ylabel("KE [J]")
+        plt.ylabel("KE [m5/s2]")
         #plt.xlim(-1,2)
-        plt.title("Kinetic Energy per mode")
+        plt.title("Kinetic Energy per unit density per mode")
         plt.grid(True)
         plt.tight_layout()
         plt.savefig(f"{work_dir}/all_modes_KE.png", dpi=dpi)
@@ -1124,14 +1174,15 @@ else:
    Pvorticity_max_sorted = None
    Pvorticity_mean_sorted = None
 
+# inizializzazione
+PE_KE_ratio_sorted = None
+PE_sorted = None
+KE_sorted = None
+
 if flag_PE_KE_ratio == 1:
    print ('PE_KE_ratio',PE_KE_ratio)
    PE_KE_ratio_sorted = [PE_KE_ratio[m] for m in sorted_indices]
    PE_sorted = [PE[m] for m in sorted_indices]
    KE_sorted = [KE[m] for m in sorted_indices]
-else:
-   PE_KE_ratio_sorted = None
-   PE = None
-   KE = None
 
 plot_all_modes_amplitude(modes_sorted, period_sorted, work_dir=work_dir, Pvorticity_rms=Pvorticity_rms_sorted, Pvorticity_max=Pvorticity_max_sorted, Pvorticity_mean=Pvorticity_mean_sorted, vorticity_rms=vorticity_rms_sorted, vorticity_max=vorticity_max_sorted, vorticity_mean=vorticity_mean_sorted, PE_KE_ratio=PE_KE_ratio_sorted, PE=PE_sorted, KE=KE_sorted )
