@@ -14,5 +14,6 @@ semi-analitical_med_mode_original.py -> uguale alla vecchia versione completa
 semi-analitical_med_modes_paper.py -> versione creata dalla semi-analitical_med_mode_original.py correggendo qualche bug (calcolo PE/KE)
 semi-analitical_med_mode_2runs.py -> estensione di semi-analitical_med_modes_paper.py fino a 40h
 semi-analitical_med_mode_3runs.py -> estensione di semi-analitical_med_mode_2runs.py che calcola anche autonomamente i modi oscillatori da f=0
-                                     (ATTENZIONE: questo e' ancora da sistemare perche' vanno gestiti i casi in cui f=0 genera uno scift di frequenza )
+                                     (ATTENZIONE: questo e' ancora da sistemare perche' vanno gestiti i casi in cui f=0 genera uno shift di frequenza )
+comp_sa_Vs_num -> directory with codes for semi-analytic Vs numerical prodedures 
 

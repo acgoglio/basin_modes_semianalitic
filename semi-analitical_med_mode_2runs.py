@@ -78,7 +78,7 @@ flag_RM_coriolis = 0
 # flag_compute_modes = 1 (i modi si ricalcolano). Il ramo di solo
 # caricamento da netCDF esiste (load_modes_from_netcdf_full) ma non e'
 # collegato al driver a due run in questa prima versione.
-flag_compute_modes = 1
+flag_compute_modes = 0
 
 # To apply the bdy conditions on eta => flag_eta_bdy=1
 flag_eta_bdy = 1
@@ -984,7 +984,7 @@ def plot_per_mode(period, values, is_oscillatory, ylabel, title, filename,
             ax.axvspan(SHADE_LO, SHADE_HI, color="0.85", alpha=0.6, zorder=0)
             h, l = ax.get_legend_handles_labels()
             h.append(Patch(facecolor="0.85", edgecolor="none"))
-            l.append(f"{SHADE_LO:.0f}-{SHADE_HI:.0f} h Modes: see Appendix")
+            l.append(f"{SHADE_LO:.0f}-{SHADE_HI:.0f} h Modes")
             ax.legend(h, l, loc=legend_loc, fontsize=FS_LEGEND, frameon=True)
         else:
             ax.legend(loc=legend_loc, fontsize=FS_LEGEND, frameon=True)
@@ -993,7 +993,7 @@ def plot_per_mode(period, values, is_oscillatory, ylabel, title, filename,
         if FLAG_SHADE_SHORT:
             ax.axvspan(SHADE_LO, SHADE_HI, color="0.85", alpha=0.6, zorder=0)
             ax.legend([Patch(facecolor="0.85", edgecolor="none")],
-                      [f"{SHADE_LO:.0f}-{SHADE_HI:.0f} h Modes: see Appendix"],
+                      [f"{SHADE_LO:.0f}-{SHADE_HI:.0f} h Modes"],
                       loc=legend_loc, fontsize=FS_LEGEND, frameon=True)
         ax.plot(period, values, linestyle='none', marker='o', markersize=9,
                 color='0.4', markeredgecolor='black', markeredgewidth=0.6,
